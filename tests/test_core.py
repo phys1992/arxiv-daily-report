@@ -457,25 +457,54 @@ class MonthlyTest(HermeticTestCase):
             ["2026-10-07", "2026-10-13"],
         )
 
-    def test_clip_keeps_sentence_boundary(self):
-        from grqc.report_monthly import _clip
+    def test_no_artificial_length_limits(self):
+        """月报不设人为字数上限：准确优先，简明其次。"""
+        from grqc import report_monthly as rm
 
-        long = "第一句讲了一个很长的结论。第二句又补充了很多细节，还带了说明。第三句是多余的。"
-        out = _clip(long, 25)
-        self.assertTrue(out.endswith("。"), out)
-        self.assertLessEqual(len(out), 40, out)
-        self.assertIn("第一句", out)
-        self.assertEqual(_clip("短句。", 90), "短句。")
-        # 完全没有句末标点时硬截并加省略号
-        hard = _clip("没有任何标点的一长串文字" * 8, 20)
-        self.assertTrue(hard.endswith("…"), hard)
-        self.assertLessEqual(len(hard), 21)
+        self.assertFalse(hasattr(rm, "TOP_THEMES"), "不应再有主题条数上限")
+        self.assertFalse(hasattr(rm, "_clip"), "不应再对主题要点做截断")
+        src = Path(rm.__file__).read_text(encoding="utf-8")
+        for banned in ("不超过", "最多 2 句", "250–400", "Brevity is the first"):
+            self.assertNotIn(banned, src, f"配额要求里不应出现 {banned!r}")
+        # 准确性要求必须写明
+        self.assertIn("力求准确是第一要求", src)
+        self.assertIn("Accuracy comes first", src)
 
-    def test_theme_notes_limited_to_top_n(self):
-        from grqc.report_monthly import TOP_THEMES
+    def test_all_substantive_themes_are_kept(self):
+        """有论文的主题都应保留，不做 Top-N 裁剪。"""
+        import json as _json
+        import tempfile as _tf
 
-        self.assertGreaterEqual(TOP_THEMES, 5)
-        self.assertLessEqual(TOP_THEMES, 14)
+        from grqc.report_monthly import collect_month, monthly_llm, MonthlyData
+
+        class FakeClient:
+            ready = True
+
+            def describe(self):
+                return "fake"
+
+            def chat_json(self, system, user, *, schema_hint="", max_tokens=None, retries=3):
+                if "themes" in schema_hint:
+                    return {"themes": [
+                        {"code": f"t{i}", "text": f"主题 {i} 的实质进展。", "days": ["10-07"], "count": 1}
+                        for i in range(14)
+                    ]}
+                return {"overview": "概览。", "highlights": [{"text": "进展", "days": ["10-07"]}]}
+
+        with _tf.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json")
+            labels = {f"t{i}": (f"主题{i}", f"Theme{i}") for i in range(14)}
+            labels["other"] = ("其他", "Other")
+            order = list(labels)
+            data = MonthlyData(
+                month="2026-10", days=["2026-10-07"],
+                digests={"2026-10-07": {"highlights": "x", "count": 14,
+                                        "themes": {f"t{i}": f"某日主题{i}综述。" for i in range(14)}}},
+                theme_counts={f"t{i}": 1 for i in range(14)},
+            )
+            monthly_llm(FakeClient(), data, lang="zh", labels=labels, order=order,
+                        progress=lambda m: None)
+            self.assertEqual(len(data.theme_notes), 14, "14 个有论文的主题都应保留")
 
     def test_collect_month_merges_multiple_categories(self):
         from grqc.report_monthly import collect_month

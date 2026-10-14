@@ -28,9 +28,7 @@ from .store import Store
 log = logging.getLogger(__name__)
 Progress = Callable[[str], None]
 
-PROMPT_VERSION = "monthly-v3"
-
-TOP_THEMES = 10          # 简报里最多列几个主题（按篇数取前 N）
+PROMPT_VERSION = "monthly-v4"
 
 SYSTEM_ZH = """你是一位相对论与引力领域的科研助理，负责把一个月内每天的 arXiv 日报浓缩成一份月度简报。
 
@@ -46,8 +44,13 @@ SYSTEM_ZH = """你是一位相对论与引力领域的科研助理，负责把�
 6. 逻辑要完整：给结论时给出前提或适用范围；作对比时说明比较对象。
 7. 语法从简：短句为主，一句话只说一件事，不用长定语和嵌套从句，不用比喻和夸张。
 
-篇幅：
-8. 简明扼要是第一要求。宁可少写，也不要把日报逐条复述一遍。"""
+准确性：
+8. 力求准确是第一要求。所有判断都要能在日报里找到依据；不确定就不写。
+   宁可写得更长一些把事情说清楚，也不要为了短而牺牲准确性或逻辑完整。
+
+表达：
+9. 在准确的前提下力求简明。只写有实质内容的进展，不重复、不铺陈、不写套话。
+   能一句话说清的就不要写两句。同一件事只说一遍。"""
 
 SYSTEM_EN = """You are a research assistant in relativity and gravitation, condensing a month of
 daily arXiv digests into a short monthly brief.
@@ -64,8 +67,13 @@ Terminology and wording:
 6. Be logically complete: give the premise or scope with any conclusion; name comparison baselines.
 7. Keep the grammar simple: short sentences, one idea each, no nesting, no metaphors or hype.
 
-Length:
-8. Brevity is the first requirement. Write less rather than restating every daily digest."""
+Accuracy:
+8. Accuracy comes first. Every statement must be traceable to the supplied digests; if unsure,
+   omit it. Prefer a longer, precise account over a short but vague or incomplete one.
+
+Expression:
+9. Be concise subject to being accurate. Include only substantive progress; no repetition,
+   no padding, no filler. If one sentence suffices, do not write two."""
 
 
 @dataclass
@@ -234,27 +242,6 @@ def _chunk(lines: list[str], max_chars: int = 24000, max_items: int = 40) -> lis
     return out
 
 
-def _clip(text: str, limit: int = 130) -> str:
-    """把过长的主题要点按句子边界截断（对模型的硬性限长做兜底）。
-
-    优先往后找一个句末标点，让截断后的语义仍然完整；找不到再往前退。
-    """
-    t = " ".join((text or "").split())
-    if len(t) <= limit:
-        return t
-    marks = "。；！？!?;."
-    # 1) 稍稍超限也要把当前这句话说完
-    for i in range(limit, min(len(t), int(limit * 1.5))):
-        if t[i] in marks:
-            return t[: i + 1]
-    # 2) 往前退到上一个句末（至少要保留 40% 的内容）
-    for i in range(min(limit, len(t)) - 1, max(1, int(limit * 0.4)), -1):
-        if t[i] in marks:
-            return t[: i + 1]
-    # 3) 整段没有句末标点：硬截
-    return t[:limit].rstrip("，,、 ") + "…"
-
-
 def _valid_days(raw, month: str) -> list[str]:
     """把模型返回的 MM-DD / YYYY-MM-DD 校验成该月内真实存在的日期。"""
     out: list[str] = []
@@ -303,7 +290,7 @@ def monthly_llm(
             )
             try:
                 obj = client.chat_json(SYSTEM_ZH if lang == "zh" else SYSTEM_EN, user,
-                                       schema_hint=schema_themes, max_tokens=4000)
+                                       schema_hint=schema_themes, max_tokens=8000)
                 for item in obj.get("themes") or []:
                     if isinstance(item, dict) and str(item.get("text") or "").strip():
                         raw_items.append(json.dumps(item, ensure_ascii=False))
@@ -318,7 +305,7 @@ def monthly_llm(
             )
             try:
                 obj = client.chat_json(SYSTEM_ZH if lang == "zh" else SYSTEM_EN, user,
-                                       schema_hint=schema_themes, max_tokens=4000)
+                                       schema_hint=schema_themes, max_tokens=8000)
                 merged = [json.dumps(it, ensure_ascii=False) for it in (obj.get("themes") or [])
                           if isinstance(it, dict) and str(it.get("text") or "").strip()]
                 if merged:
@@ -337,15 +324,14 @@ def monthly_llm(
             code = "other"
         themes.append({
             "code": code,
-            "text": _clip(str(item.get("text") or ""), 130),
+            "text": " ".join(str(item.get("text") or "").split()),
             "days": _valid_days(item.get("days"), data.month),
             "count": data.theme_counts.get(code, int(item.get("count") or 0)),
         })
     themes.sort(key=lambda x: (-(x["count"] or 0),
                                order.index(x["code"]) if x["code"] in order else 999))
-    # 只保留确有论文的主题，并限制条数，保证简报简短
-    themes = [t for t in themes if t["text"] and (t["count"] or 0) > 0]
-    data.theme_notes = themes[:TOP_THEMES]
+    # 保留所有确有论文的主题（不设条数上限）
+    data.theme_notes = [t for t in themes if t["text"] and (t["count"] or 0) > 0]
 
     # ---- reduce：总览 + 主要进展 ----
     progress("  月报 reduce：生成总览与主要进展")
@@ -358,14 +344,14 @@ def monthly_llm(
         for t in data.theme_notes
     )
     ask = (
-        '请输出 JSON：{"overview":"本月概览，250–400 字，写成一段连贯文字，像论文摘要那样'
-        '先总述本月主线，再点出最突出的方向以及它们之间的关系。不要罗列篇数，不要逐条复述。'
-        '提到具体工作时在句末用（10月13日）标注它出现在哪天的日报上。",'
+        '请输出 JSON：{"overview":"本月概览，写成一段连贯文字，像论文摘要那样先总述本月主线，'
+        '再点出最突出的方向以及它们之间的关系。力求准确，不要为了短而省略关键条件或因果关系；'
+        '也不要罗列篇数、不要逐条复述日报。提到具体工作时在句末用（10月13日）标注它出现在哪天的日报上。",'
         '"highlights":[{"text":"一条主要进展，1–2 句，简洁准确","days":["10-13"]}]}，'
         'highlights 给 4–6 条。'
         if lang == "zh"
-        else 'Return JSON: {"overview":"250-400 word overview as one coherent paragraph, '
-             'like an abstract; cite days in parentheses",'
+        else 'Return JSON: {"overview":"A coherent paragraph overview, like an abstract; be accurate '
+             'rather than terse; cite days in parentheses",'
              '"highlights":[{"text":"...","days":["10-13"]}]} with 4-6 highlights.'
     )
     user = (
@@ -468,13 +454,11 @@ ol.moves li { margin-bottom:1.8mm; }
         parts.append(h2("分主题要点", "By theme"))
         for t in data.theme_notes:
             label = labels.get(t["code"], (t["code"], t["code"]))[0 if lang == "zh" else 1]
-            meta = []
+            # 日期已在正文里逐条标注，这里只给篇数，避免同一信息出现两次
+            meta_html = ""
             if t.get("count"):
-                meta.append(f"{t['count']} 篇" if lang == "zh" else f"{t['count']} papers")
-            tag = _fmt_days(t.get("days") or [], lang)
-            if tag:
-                meta.append(tag)
-            meta_html = f" <span class='meta'>{html.escape(' · '.join(meta))}</span>" if meta else ""
+                meta_html = (f" <span class='meta'>{t['count']} 篇</span>" if lang == "zh"
+                             else f" <span class='meta'>{t['count']} papers</span>")
             parts.append(
                 f"<div class='theme'><span class='name'>{html.escape(label)}</span>{meta_html}"
                 f"<p>{html.escape(t['text'])}</p></div>"
