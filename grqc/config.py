@@ -26,11 +26,34 @@ APP_NAME = "grqc-daily"
 
 
 def home_dir() -> Path:
-    """可变状态的根目录。默认是项目根，可用 GRQC_HOME 覆盖。"""
+    """可变状态（配置/密钥/数据/报告）的根目录。
+
+    优先级：
+      1. GRQC_HOME 环境变量；
+      2. 源码检出（git clone / 解压 zip / pip install -e）→ 用项目根，
+         这样「整个目录拷走就能用」，符合可迁移的设计目标；
+      3. pip 安装进 site-packages 等场景 → 用用户数据目录（XDG）。
+
+    第 3 条很重要：site-packages 通常可写，但把用户数据写进去会在
+    升级/卸载时被清掉，也违反 Python 打包惯例。
+    """
     env = os.environ.get("GRQC_HOME", "").strip()
     if env:
         return Path(env).expanduser().resolve()
-    return PROJECT_ROOT
+    if _is_source_checkout():
+        return PROJECT_ROOT
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
+    return (base / APP_NAME).resolve()
+
+
+def _is_source_checkout() -> bool:
+    """判断当前是不是从源码目录运行的（wheel 里不含 run.py）。"""
+    if (PROJECT_ROOT / "run.py").exists():
+        return True
+    if (PROJECT_ROOT / ".git").exists():
+        return True
+    return (PROJECT_ROOT / "assets" / "fonts").is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +202,23 @@ class Config:
             self._data = _deep_merge(self._data, overrides)
 
     # -- 载入 / 保存 --------------------------------------------------------
+    def ensure_home(self) -> None:
+        """确保状态目录存在且可写，给出可操作的报错而不是原始 traceback。"""
+        try:
+            self.home.mkdir(parents=True, exist_ok=True)
+            probe = self.home / ".write-test"
+            probe.touch()
+            probe.unlink()
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"状态目录不可写：{self.home}\n"
+                f"  原因：{exc}\n"
+                "  解决：设置环境变量 GRQC_HOME 指向一个可写目录，例如：\n"
+                "        export GRQC_HOME=\$HOME/grqc-daily-data"
+            ) from exc
+
     def load(self) -> "Config":
+        self.ensure_home()
         raw: dict[str, Any] = {}
         if self.path.exists():
             try:

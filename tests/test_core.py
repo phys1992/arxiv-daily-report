@@ -229,6 +229,34 @@ class ConfigTest(HermeticTestCase):
         mode = (self.path.with_name("secrets.json").stat().st_mode) & 0o777
         self.assertEqual(mode, 0o600)
 
+    def test_home_dir_source_checkout_vs_installed(self):
+        """源码检出用项目根；pip 安装（site-packages）用用户数据目录。"""
+        import os as _os
+        from unittest import mock
+
+        from grqc import config as _cfg
+
+        # 源码检出：项目根
+        with mock.patch.object(_cfg, "_is_source_checkout", return_value=True):
+            self.assertEqual(_cfg.home_dir(), _cfg.PROJECT_ROOT)
+        # 已安装：落到 XDG 数据目录，而不是 site-packages
+        with mock.patch.object(_cfg, "_is_source_checkout", return_value=False):
+            home = _cfg.home_dir()
+            self.assertNotEqual(home, _cfg.PROJECT_ROOT)
+            self.assertEqual(home.name, _cfg.APP_NAME)
+            self.assertNotIn("site-packages", str(home))
+        # GRQC_HOME 优先级最高
+        _os.environ["GRQC_HOME"] = "/tmp/grqc-home-test"
+        try:
+            self.assertEqual(str(_cfg.home_dir()), "/tmp/grqc-home-test")
+        finally:
+            _os.environ.pop("GRQC_HOME", None)
+
+    def test_is_source_checkout_true_in_repo(self):
+        from grqc.config import _is_source_checkout
+
+        self.assertTrue(_is_source_checkout(), "本仓库应被判定为源码检出")
+
     def test_relative_paths_resolve_against_home(self):
         p = self.cfg.resolve("reports")
         self.assertTrue(p.is_absolute())
