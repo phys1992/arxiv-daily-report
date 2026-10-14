@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS reports (
     PRIMARY KEY (day, category, kind)
 );
 
+CREATE TABLE IF NOT EXISTS day_digest (
+    day        TEXT NOT NULL,
+    category   TEXT NOT NULL,
+    highlights TEXT NOT NULL DEFAULT '',
+    themes     TEXT NOT NULL DEFAULT '{}',
+    theme_counts TEXT NOT NULL DEFAULT '{}',
+    model      TEXT NOT NULL DEFAULT '',
+    count      INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (day, category)
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL,
@@ -98,7 +110,19 @@ class Store:
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """老版本数据库的轻量迁移（幂等）。"""
+        try:
+            cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(day_digest)")}
+            if "theme_counts" not in cols:
+                self.conn.execute(
+                    "ALTER TABLE day_digest ADD COLUMN theme_counts TEXT NOT NULL DEFAULT '{}'"
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     def close(self) -> None:
         try:
@@ -227,6 +251,58 @@ class Store:
             (day,),
         ).fetchall()
         return {r["primary_category"]: r["n"] for r in rows}
+
+    # -- 日报摘要存档（月报的输入）------------------------------------------
+    def save_day_digest(self, day: str, category: str, *, highlights: str = "",
+                        themes: dict | None = None, theme_counts: dict | None = None,
+                        model: str = "", count: int = 0) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO day_digest(day,category,highlights,themes,theme_counts,model,count,"
+                "created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(day,category) DO UPDATE SET "
+                "highlights=excluded.highlights, themes=excluded.themes, "
+                "theme_counts=excluded.theme_counts, model=excluded.model, "
+                "count=excluded.count, created_at=excluded.created_at",
+                (day, category, highlights or "",
+                 json.dumps(themes or {}, ensure_ascii=False),
+                 json.dumps(theme_counts or {}, ensure_ascii=False),
+                 model, count, _now()),
+            )
+            self.conn.commit()
+
+    def get_day_digest(self, day: str, category: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM day_digest WHERE day=? AND category=?", (day, category)
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        for key in ("themes", "theme_counts"):
+            try:
+                out[key] = json.loads(out.get(key) or "{}")
+            except Exception:
+                out[key] = {}
+        return out
+
+    def month_digests(self, start_day: str, end_day: str, categories: list[str] | None = None) -> list[dict[str, Any]]:
+        """取某个月区间内所有日报摘要，按日期升序。"""
+        sql = "SELECT * FROM day_digest WHERE day>=? AND day<?"
+        args: list[Any] = [start_day, end_day]
+        if categories:
+            sql += " AND category IN (%s)" % ",".join("?" * len(categories))
+            args.extend(categories)
+        sql += " ORDER BY day, category"
+        rows = self.conn.execute(sql, args).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            for key in ("themes", "theme_counts"):
+                try:
+                    d[key] = json.loads(d.get(key) or "{}")
+                except Exception:
+                    d[key] = {}
+            out.append(d)
+        return out
 
     # -- 报告索引 ----------------------------------------------------------
     def record_report(self, day: str, category: str, path: str, count: int, kind: str = "daily") -> int:

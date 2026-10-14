@@ -52,6 +52,7 @@ class LLMClient:
         self.api_key = cfg.api_key(self.provider.key)
         self.last_usage = Usage()
         self.calls = 0
+        self.last_finish_reason = ""
 
     # ------------------------------------------------------------------
     @property
@@ -128,12 +129,21 @@ class LLMClient:
                     text = self._call(system, user, schema_hint)
                     obj = _parse_json(text)
                     if obj is None:
+                        if self.last_finish_reason == "length":
+                            raise LLMError(
+                                f"输出被 max_tokens({self.max_tokens}) 截断，JSON 不完整"
+                                f"（已收到 {len(text)} 字符）"
+                            )
                         raise LLMError(f"模型输出不是合法 JSON：{text[:200]}")
                     return obj
                 except Exception as exc:  # noqa: BLE001
                     last = exc
                     log.warning("模型调用失败（第 %d 次）：%s", attempt, exc)
-                    if attempt < retries:
+                    # 输出被截断时自动放宽预算再试（长列表常见）
+                    if "截断" in str(exc) and self.max_tokens < 32000:
+                        self.max_tokens = min(32000, int(self.max_tokens * 2))
+                        log.info("输出被截断，预算提高到 %d tokens 后重试", self.max_tokens)
+                    elif attempt < retries:
                         time.sleep(min(30.0, 2.0 ** attempt * 2))
             raise LLMError(f"模型调用连续失败：{last}")
         finally:
@@ -172,6 +182,7 @@ class LLMClient:
             raise LLMError(f"响应结构异常：{str(data)[:200]}") from exc
         u = data.get("usage") or {}
         self.last_usage = Usage(int(u.get("prompt_tokens", 0)), int(u.get("completion_tokens", 0)))
+        self.last_finish_reason = str(choice.get("finish_reason") or "")
         self._log_usage()
         if not (text or "").strip():
             finish = choice.get("finish_reason")

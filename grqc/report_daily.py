@@ -115,6 +115,25 @@ def build_category_report(
             + " ".join(f"{c}(U+{ord(c):04X})" for c in missing[:20])
         )
 
+    # 存档当日要点与主题综述（外加每个主题的篇数）：月报只读这些日报摘要
+    from collections import Counter as _Counter
+
+    theme_counts = _Counter()
+    for _p in papers:
+        _code = next((t for t in (_p.themes or []) if t in labels), "other")
+        theme_counts[_code] += 1
+    try:
+        store.save_day_digest(
+            day, category,
+            highlights=highlights,
+            themes=theme_notes,
+            theme_counts=dict(theme_counts),
+            model=model,
+            count=len(papers),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("存档日报摘要失败（不影响出报告）：%s", exc)
+
     reg, bold = resolve_fonts(cfg)
     ctx = ReportContext(
         category=category,

@@ -19,6 +19,7 @@
     "interval_minutes": 1440,
     "timezone": "Asia/Shanghai",
     "report_day_offset": 1,
+    "auto_monthly": true,
     "catch_up_days": 7,
     "retry": 3
   },

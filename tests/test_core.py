@@ -385,7 +385,8 @@ class BilingualTest(unittest.TestCase):
     def test_english_report_labels(self):
         from grqc.render import heading
 
-        self.assertEqual(heading("en", "report.references", False), "References")
+        self.assertEqual(heading("en", "report.papers", False), "Papers")
+        self.assertEqual(heading("en", "report.highlights", False), "Highlights")
 
     def test_bilingual_daily_html_renders(self):
         """不调用模型，只验证双语版式能渲染出 HTML。"""
@@ -411,9 +412,146 @@ class BilingualTest(unittest.TestCase):
             out = render_daily_html(ctx, svc)
             self.assertIn("论文清单", out)
             self.assertIn("Papers", out)
-            self.assertIn("References", out)
             self.assertIn("中文要点", out)
             self.assertIn("English note", out)
+            # 日报不再单列参考文献（论文清单已含作者/标题/arXiv 号/链接）
+            self.assertNotIn("参考文献", out)
+            self.assertNotIn("report.references", out)
         finally:
             store.close()
             tmp.cleanup()
+
+
+class MonthlyTest(HermeticTestCase):
+    """月报：目标月份、日期引用、依据日报浓缩。"""
+
+    def _cfg(self, tmp: str) -> Config:
+        return Config(path=Path(tmp) / "config.json")
+
+    def test_target_month_is_previous_month(self):
+        from grqc.report_monthly import target_month
+
+        z = dt.timezone(dt.timedelta(hours=8))
+        self.assertEqual(target_month(dt.datetime(2026, 11, 1, 19, 0, tzinfo=z)), "2026-10")
+        self.assertEqual(target_month(dt.datetime(2026, 10, 14, 12, 0, tzinfo=z)), "2026-09")
+        self.assertEqual(target_month(dt.datetime(2026, 1, 1, 12, 0, tzinfo=z)), "2025-12")
+
+    def test_should_run_monthly_only_on_first_day(self):
+        from grqc.report_monthly import should_run_monthly
+
+        z = dt.timezone(dt.timedelta(hours=8))
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td)
+            self.assertEqual(should_run_monthly(cfg, dt.datetime(2026, 11, 1, 19, 0, tzinfo=z)), "2026-10")
+            self.assertIsNone(should_run_monthly(cfg, dt.datetime(2026, 11, 2, 19, 0, tzinfo=z)))
+            cfg.update({"schedule": {"auto_monthly": False}})
+            self.assertIsNone(should_run_monthly(cfg, dt.datetime(2026, 12, 1, 19, 0, tzinfo=z)))
+
+    def test_day_label_and_validation(self):
+        from grqc.report_monthly import _valid_days, day_label
+
+        self.assertEqual(day_label("2026-10-07"), "10月7日")
+        self.assertEqual(day_label("2026-10-07", "en"), "Oct 7")
+        self.assertEqual(
+            _valid_days(["10-07", "2026-10-13", "10-32", "09-01", ""], "2026-10"),
+            ["2026-10-07", "2026-10-13"],
+        )
+
+    def test_clip_keeps_sentence_boundary(self):
+        from grqc.report_monthly import _clip
+
+        long = "第一句讲了一个很长的结论。第二句又补充了很多细节，还带了说明。第三句是多余的。"
+        out = _clip(long, 25)
+        self.assertTrue(out.endswith("。"), out)
+        self.assertLessEqual(len(out), 40, out)
+        self.assertIn("第一句", out)
+        self.assertEqual(_clip("短句。", 90), "短句。")
+        # 完全没有句末标点时硬截并加省略号
+        hard = _clip("没有任何标点的一长串文字" * 8, 20)
+        self.assertTrue(hard.endswith("…"), hard)
+        self.assertLessEqual(len(hard), 21)
+
+    def test_theme_notes_limited_to_top_n(self):
+        from grqc.report_monthly import TOP_THEMES
+
+        self.assertGreaterEqual(TOP_THEMES, 5)
+        self.assertLessEqual(TOP_THEMES, 14)
+
+    def test_collect_month_merges_multiple_categories(self):
+        from grqc.report_monthly import collect_month
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                store.save_day_digest("2026-10-07", "gr-qc", highlights="A 要点",
+                                      themes={"blackhole": "黑洞甲"}, count=5)
+                store.save_day_digest("2026-10-07", "hep-th", highlights="B 要点",
+                                      themes={"blackhole": "黑洞乙", "holography": "全息丙"}, count=3)
+                store.save_day_digest("2026-10-13", "gr-qc", highlights="C 要点",
+                                      themes={"cosmology": "宇宙丁"}, count=7)
+                # 必须同时订阅两个分类，否则未被订阅的分类会被过滤掉（这是预期行为）
+                cfg = self._cfg(td)
+                cfg.update({"subscriptions": [
+                    {"category": "gr-qc", "enabled": True},
+                    {"category": "hep-th", "enabled": True},
+                ]})
+                data = collect_month(cfg, store, "2026-10")
+                self.assertEqual(data.days, ["2026-10-07", "2026-10-13"])
+                merged = data.digests["2026-10-07"]
+                self.assertIn("A 要点", merged["highlights"])
+                self.assertIn("B 要点", merged["highlights"])
+                self.assertIn("黑洞甲", merged["themes"]["blackhole"])
+                self.assertIn("黑洞乙", merged["themes"]["blackhole"])
+                self.assertEqual(merged["count"], 8)
+                self.assertIn("holography", data.theme_counts)
+            finally:
+                store.close()
+
+    def test_monthly_html_has_dates_and_no_reference_list(self):
+        from grqc.report_monthly import MonthlyData, render_monthly_html
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td)
+            data = MonthlyData(
+                month="2026-10",
+                days=["2026-10-07", "2026-10-13"],
+                digests={},
+                paper_count=61,
+                overview="本月主线是黑洞响应与引力波观测。",
+                highlights=[{"text": "证明 Kerr-Newman 静态 Love 数整体为零", "days": ["2026-10-13"]}],
+                theme_notes=[{"code": "blackhole", "text": "黑洞方向进展集中在响应函数。",
+                              "days": ["2026-10-07", "2026-10-13"], "count": 6}],
+                model="mock",
+            )
+            out = render_monthly_html(cfg, data, scope_name="gr-qc")
+            self.assertIn("本月概览", out)
+            self.assertIn("主要进展", out)
+            self.assertIn("分主题要点", out)
+            self.assertIn("10月13日", out)          # 日期标注
+            self.assertIn("10月7日", out)
+            # 不列文献表、不列论文清单、不出现 arXiv 号
+            self.assertNotIn("参考文献", out)
+            self.assertNotIn("当月论文清单", out)
+            self.assertNotIn("arXiv:", out)
+
+    def test_daily_html_drops_reference_section(self):
+        from grqc.render import ReportContext, render_daily_html
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                svc = MathService(store, assets_dir=PROJECT / "assets", backend="unicode")
+                cfg = self._cfg(td)
+                reg, bold = resolve_fonts(cfg)
+                ctx = ReportContext(
+                    category="gr-qc", category_name="gr-qc", day="2026-10-13",
+                    papers=[make_paper()], assets_dir=PROJECT / "assets",
+                    font_regular=reg, font_bold=bold,
+                    theme_labels={"other": ("其他", "Other")}, theme_order=["other"],
+                )
+                out = render_daily_html(ctx, svc)
+                self.assertIn("论文清单", out)
+                self.assertIn("arXiv:2610.12345", out)   # 清单里仍带 arXiv 号与链接
+                self.assertNotIn("参考文献", out)
+            finally:
+                store.close()

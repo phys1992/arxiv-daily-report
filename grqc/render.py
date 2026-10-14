@@ -327,11 +327,7 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
                 parts.append(f"<div class='sum' style='color:#8a94a3'>{html.escape(rt(lang, 'report.no_llm'))}</div>")
             parts.append("</div>")
 
-    # 参考文献
-    parts.append(f"<h2>{heading(lang, 'report.references', ctx.bilingual)}</h2>")
-    for p in papers:
-        i = index.get(p.uid, 0)
-        parts.append(f"<div class='ref'>{html.escape(p.citation(i))}</div>")
+    # 不再单列参考文献：论文清单里已含作者、标题、arXiv 号与可点击链接
 
     # 页脚
     foot = rt(lang, "report.footer")

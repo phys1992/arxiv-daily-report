@@ -62,6 +62,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "interval_minutes": 1440,
         "timezone": "Asia/Shanghai",
         "report_day_offset": 1,        # 报告日 = 运行日 - N 天
+        "auto_monthly": True,          # 每月 1 号自动生成上一个自然月的简报
         "catch_up_days": 7,            # 每次回溯天数（周末/节假日补录）
         "retry": 3,
     },

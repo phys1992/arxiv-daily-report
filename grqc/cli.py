@@ -50,9 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--day")
     p.add_argument("--no-llm", action="store_true", help="跳过模型摘要，只出元数据版")
     p.add_argument("--category", action="append")
+    p.add_argument("--no-monthly", action="store_true",
+                   help="即使今天是月初也不自动生成上月月报")
 
-    p = sub.add_parser("monthly", help="生成月报 PDF")
-    p.add_argument("--month", help="YYYY-MM（默认：上个月）")
+    p = sub.add_parser("monthly", help="生成月报 PDF（依据该月的日报）")
+    p.add_argument("--month", help="YYYY-MM（默认：上一个自然月）")
+    p.add_argument("--no-llm", action="store_true", help="只出统计版简报")
 
     p = sub.add_parser("serve", help="启动 Web 配置界面")
     p.add_argument("--host")
@@ -81,12 +84,21 @@ def main(argv: list[str] | None = None) -> int:
         paths = run_daily(cfg, store, day=args.day, only=args.category, use_llm=not args.no_llm)
         for p in paths:
             print(f"  生成：{p}")
+        # 北京时间每月 1 号：顺带把上一个自然月的简报也出了
+        if not args.no_monthly and args.day is None:
+            from grqc.report_monthly import run_monthly, should_run_monthly
+
+            m = should_run_monthly(cfg)
+            if m:
+                print(f"  今天是月初，自动生成 {m} 月报")
+                for p in run_monthly(cfg, store, month=m, use_llm=not args.no_llm):
+                    print(f"  生成：{p}")
         return 0
 
     if args.cmd == "monthly":
         from grqc.report_monthly import run_monthly
 
-        paths = run_monthly(cfg, store, month=args.month)
+        paths = run_monthly(cfg, store, month=args.month, use_llm=not args.no_llm)
         for p in paths:
             print(f"  生成：{p}")
         return 0

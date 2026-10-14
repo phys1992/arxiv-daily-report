@@ -39,9 +39,18 @@ def next_fire(cfg: Config, now: dt.datetime | None = None) -> dt.datetime:
 
 
 def run_once(cfg: Config, store: Store, *, day: str | None = None) -> None:
+    """跑一轮：日报；若北京时间是每月 1 号，再补上一个自然月的简报。"""
     from .report_daily import run_daily
 
     run_daily(cfg, store, day=day)
+
+    if day is None:
+        from .report_monthly import run_monthly, should_run_monthly
+
+        month = should_run_monthly(cfg)
+        if month:
+            log.info("今天是月初，生成 %s 月报", month)
+            run_monthly(cfg, store, month=month)
 
 
 def run_daemon(cfg: Config, store: Store) -> None:
