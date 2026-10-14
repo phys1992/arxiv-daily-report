@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "ui_language": "zh-CN",
+  "report_language": "zh",
+  "subscriptions": [
+    {
+      "category": "gr-qc",
+      "enabled": true,
+      "report_name": "",
+      "out_dir": ""
+    }
+  ],
+  "output_mode": "per_category",
+  "crosslist_policy": "primary",
+  "combined_out_dir": "",
+  "schedule": {
+    "mode": "daily",
+    "time": "19:00",
+    "interval_minutes": 1440,
+    "timezone": "Asia/Shanghai",
+    "report_day_offset": 1,
+    "catch_up_days": 7,
+    "retry": 3
+  },
+  "paths": {
+    "reports": "reports",
+    "data": "data",
+    "publish_dir": ""
+  },
+  "fetch": {
+    "page_size": 100,
+    "request_interval_sec": 3.0,
+    "timeout_sec": 60,
+    "user_agent": "",
+    "max_pages": 60
+  },
+  "llm": {
+    "provider": "deepseek",
+    "base_url": "",
+    "model": "",
+    "temperature": 0,
+    "max_tokens": 8192,
+    "timeout_sec": 240,
+    "concurrency": 4,
+    "fallback_provider": "",
+    "fallback_model": "",
+    "save_keys": true,
+    "disable_thinking": true
+  },
+  "report": {
+    "font_profile": "source-han",
+    "font_file_regular": "",
+    "font_file_bold": "",
+    "math_backend": "auto",
+    "include_daily_highlights": true,
+    "include_abstract_note": true,
+    "author_limit": 3,
+    "themes": [],
+    "keep_raw_xml": true,
+    "keep_html": false
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "password": "",
+    "open_browser": true
+  }
+}

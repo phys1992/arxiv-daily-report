@@ -1,0 +1,31 @@
+# ---- 用户配置与密钥（不入库）----
+config.json
+secrets.json
+
+# ---- 运行期数据与产物 ----
+data/
+reports/
+logs/
+*.sqlite3
+*.sqlite3-journal
+
+# ---- 可选依赖（按需 npm install 生成）----
+assets/mathjax/node_modules/
+assets/mathjax/package-lock.json
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

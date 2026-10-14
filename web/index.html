@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grqc-daily 配置</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <!-- ================= 左侧固定导航 ================= -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">arXiv</span>
+      <span class="brand-name">grqc-daily</span>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="llm"><span class="ico">&#9881;</span><span data-i18n="nav.llm"></span></button>
+      <button class="nav-item" data-view="schedule"><span class="ico">&#128197;</span><span data-i18n="nav.schedule"></span></button>
+      <button class="nav-item" data-view="subscriptions"><span class="ico">&#128449;</span><span data-i18n="nav.subscriptions"></span></button>
+      <button class="nav-item" data-view="paths"><span class="ico">&#128193;</span><span data-i18n="nav.paths"></span></button>
+      <button class="nav-item" data-view="report"><span class="ico">&#128196;</span><span data-i18n="nav.report"></span></button>
+      <button class="nav-item" data-view="language"><span class="ico">&#127760;</span><span data-i18n="nav.language"></span></button>
+      <button class="nav-item" data-view="status"><span class="ico">&#128202;</span><span data-i18n="nav.status"></span></button>
+    </nav>
+    <div class="sidebar-foot">
+      <span data-i18n="app.footer"></span>
+    </div>
+  </aside>
+
+  <!-- ================= 右侧主区 ================= -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 data-i18n="app.title"></h1>
+        <div class="crumb">
+          <span class="crumb-key" data-i18n="app.root"></span>
+          <code id="config-root">…</code>
+          <span class="crumb-sub" id="project-root"></span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="dirty-flag" class="pill pill-warn hidden" data-i18n="common.unsaved"></span>
+        <button class="btn btn-ghost" id="btn-reload" data-i18n="action.reload"></button>
+      </div>
+    </header>
+
+    <main class="content">
+      <div id="error-bar" class="error-bar hidden"></div>
+      <div id="loading" class="empty" data-i18n="app.loading"></div>
+
+      <!-- ---------- 1. 大模型设置 ---------- -->
+      <section class="view active" id="view-llm">
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="llm.title"></h2>
+            <p class="muted" data-i18n="llm.desc"></p>
+          </div>
+          <div class="card-body grid grid-2">
+            <label class="field">
+              <span class="label" data-i18n="llm.provider"></span>
+              <select id="llm-provider" data-path="llm.provider"></select>
+              <small class="hint" id="provider-note"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.base_url"></span>
+              <input type="text" id="llm-base-url" data-path="llm.base_url" spellcheck="false" autocomplete="off">
+              <small class="hint" id="base-url-hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.model"></span>
+              <span class="input-row">
+                <input type="text" id="llm-model" data-path="llm.model" list="model-options" spellcheck="false" autocomplete="off">
+                <button class="btn btn-ghost" id="btn-models" data-i18n="action.getModels"></button>
+              </span>
+              <datalist id="model-options"></datalist>
+              <small class="hint" data-i18n="llm.model_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.api_key"></span>
+              <input type="password" id="api-key" spellcheck="false" autocomplete="new-password">
+              <small class="hint" id="api-key-hint"></small>
+            </label>
+            <label class="field field-check">
+              <input type="checkbox" data-path="llm.save_keys">
+              <span>
+                <span class="label" data-i18n="llm.save_keys"></span>
+                <small class="hint" data-i18n="llm.save_keys_hint"></small>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="llm.params"></h2>
+            <p class="muted" data-i18n="llm.params_desc"></p>
+          </div>
+          <div class="card-body grid grid-3">
+            <label class="field">
+              <span class="label" data-i18n="llm.temperature"></span>
+              <input type="number" data-path="llm.temperature" step="0.1" min="0" max="2">
+              <small class="hint" data-i18n="llm.temperature_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.max_tokens"></span>
+              <input type="number" data-path="llm.max_tokens" step="256" min="256">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.timeout"></span>
+              <input type="number" data-path="llm.timeout_sec" step="10" min="10">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.concurrency"></span>
+              <input type="number" data-path="llm.concurrency" step="1" min="1" max="32">
+            </label>
+            <label class="field field-check">
+              <input type="checkbox" data-path="llm.disable_thinking">
+              <span>
+                <span class="label" data-i18n="llm.disable_thinking"></span>
+                <small class="hint" data-i18n="llm.disable_thinking_hint"></small>
+              </span>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.fallback_provider"></span>
+              <select id="fallback-provider" data-path="llm.fallback_provider"></select>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.fallback_model"></span>
+              <input type="text" data-path="llm.fallback_model" list="model-options" spellcheck="false" autocomplete="off">
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="llm.test"></h2>
+            <p class="muted" data-i18n="llm.test_desc"></p>
+          </div>
+          <div class="card-body">
+            <div class="actions">
+              <button class="btn btn-primary" id="btn-test" data-i18n="action.test"></button>
+            </div>
+            <div class="result-box hidden" id="test-result"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 2. 更新与调度 ---------- -->
+      <section class="view" id="view-schedule">
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="schedule.title"></h2>
+            <p class="muted" data-i18n="schedule.desc"></p>
+          </div>
+          <div class="card-body grid grid-3">
+            <label class="field">
+              <span class="label" data-i18n="schedule.mode"></span>
+              <select data-path="schedule.mode">
+                <option value="daily" data-i18n="schedule.mode.daily"></option>
+                <option value="interval" data-i18n="schedule.mode.interval"></option>
+                <option value="manual" data-i18n="schedule.mode.manual"></option>
+              </select>
+            </label>
+            <label class="field" id="row-time">
+              <span class="label" data-i18n="schedule.time"></span>
+              <input type="time" data-path="schedule.time">
+            </label>
+            <label class="field" id="row-interval">
+              <span class="label" data-i18n="schedule.interval"></span>
+              <input type="number" data-path="schedule.interval_minutes" step="10" min="10">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="schedule.timezone"></span>
+              <input type="text" data-path="schedule.timezone" list="tz-options" spellcheck="false" autocomplete="off">
+              <datalist id="tz-options">
+                <option value="Asia/Shanghai"></option>
+                <option value="Asia/Hong_Kong"></option>
+                <option value="Asia/Tokyo"></option>
+                <option value="Asia/Singapore"></option>
+                <option value="UTC"></option>
+                <option value="Europe/London"></option>
+                <option value="Europe/Berlin"></option>
+                <option value="America/New_York"></option>
+                <option value="America/Los_Angeles"></option>
+              </datalist>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="schedule.report_day_offset"></span>
+              <input type="number" data-path="schedule.report_day_offset" step="1" min="0" max="30">
+              <small class="hint" data-i18n="schedule.report_day_offset_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="schedule.catch_up_days"></span>
+              <input type="number" data-path="schedule.catch_up_days" step="1" min="0" max="90">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="schedule.retry"></span>
+              <input type="number" data-path="schedule.retry" step="1" min="0" max="10">
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="schedule.run_title"></h2>
+            <p class="muted" data-i18n="schedule.run_desc"></p>
+          </div>
+          <div class="card-body">
+            <div class="grid grid-3">
+              <label class="field">
+                <span class="label" data-i18n="schedule.run_day"></span>
+                <input type="date" id="run-day">
+                <small class="hint" data-i18n="schedule.run_day_hint"></small>
+              </label>
+              <label class="field field-check">
+                <input type="checkbox" id="run-use-llm" checked>
+                <span>
+                  <span class="label" data-i18n="schedule.use_llm"></span>
+                  <small class="hint" data-i18n="schedule.use_llm_hint"></small>
+                </span>
+              </label>
+              <div class="field">
+                <span class="label">&nbsp;</span>
+                <button class="btn btn-primary" id="btn-run" data-i18n="action.runNow"></button>
+              </div>
+            </div>
+            <div class="job-head">
+              <span class="label" data-i18n="schedule.log"></span>
+              <span class="pill" id="job-state"></span>
+            </div>
+            <pre class="log" id="job-log"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 3. 分类订阅 ---------- -->
+      <section class="view" id="view-subscriptions">
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="subs.tree_title"></h2>
+            <p class="muted" data-i18n="subs.tree_desc"></p>
+          </div>
+          <div class="card-body">
+            <div class="search-row">
+              <input type="search" id="cat-search" data-i18n-placeholder="subs.search" autocomplete="off">
+              <span class="pill" id="cat-count"></span>
+            </div>
+            <div class="tree" id="cat-tree"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="subs.selected_title"></h2>
+            <p class="muted" data-i18n="subs.selected_desc"></p>
+          </div>
+          <div class="card-body" id="sub-cards"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="subs.output_title"></h2>
+            <p class="muted" data-i18n="subs.output_desc"></p>
+          </div>
+          <div class="card-body grid grid-3">
+            <label class="field">
+              <span class="label" data-i18n="subs.output_mode"></span>
+              <select data-path="output_mode">
+                <option value="per_category" data-i18n="subs.output_mode.per_category"></option>
+                <option value="combined" data-i18n="subs.output_mode.combined"></option>
+                <option value="both" data-i18n="subs.output_mode.both"></option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="subs.combined_out_dir"></span>
+              <input type="text" data-path="combined_out_dir" spellcheck="false" autocomplete="off">
+              <small class="hint" data-i18n="subs.combined_out_dir_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="subs.crosslist_policy"></span>
+              <select data-path="crosslist_policy">
+                <option value="primary" data-i18n="subs.crosslist.primary"></option>
+                <option value="all" data-i18n="subs.crosslist.all"></option>
+                <option value="combined_dedup" data-i18n="subs.crosslist.combined_dedup"></option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 4. 路径与存储 ---------- -->
+      <section class="view" id="view-paths">
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="paths.title"></h2>
+            <p class="muted" data-i18n="paths.desc"></p>
+          </div>
+          <div class="card-body grid grid-2">
+            <label class="field">
+              <span class="label" data-i18n="paths.reports"></span>
+              <input type="text" data-path="paths.reports" spellcheck="false" autocomplete="off">
+              <small class="hint" data-i18n="paths.reports_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="paths.data"></span>
+              <input type="text" data-path="paths.data" spellcheck="false" autocomplete="off">
+              <small class="hint" data-i18n="paths.data_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="paths.publish"></span>
+              <input type="text" data-path="paths.publish_dir" spellcheck="false" autocomplete="off">
+              <small class="hint" data-i18n="paths.publish_hint"></small>
+            </label>
+          </div>
+          <div class="card-body">
+            <div class="label" data-i18n="paths.resolved"></div>
+            <ul class="kv-list" id="paths-resolved"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 5. 报告内容 ---------- -->
+      <section class="view" id="view-report">
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="report.title"></h2>
+            <p class="muted" data-i18n="report.desc"></p>
+          </div>
+          <div class="card-body grid grid-3">
+            <label class="field">
+              <span class="label" data-i18n="report.language"></span>
+              <select data-path="report_language">
+                <option value="zh" data-i18n="report.lang.zh"></option>
+                <option value="en" data-i18n="report.lang.en"></option>
+                <option value="zh-en" data-i18n="report.lang.zh_en"></option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="report.font_profile"></span>
+              <select data-path="report.font_profile">
+                <option value="source-han" data-i18n="report.font.source_han"></option>
+                <option value="system" data-i18n="report.font.system"></option>
+                <option value="custom" data-i18n="report.font.custom"></option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="report.math_backend"></span>
+              <select data-path="report.math_backend">
+                <option value="auto" data-i18n="report.math.auto"></option>
+                <option value="mathjax" data-i18n="report.math.mathjax"></option>
+                <option value="unicode" data-i18n="report.math.unicode"></option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="report.font_regular"></span>
+              <input type="text" data-path="report.font_file_regular" spellcheck="false" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="report.font_bold"></span>
+              <input type="text" data-path="report.font_file_bold" spellcheck="false" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="report.author_limit"></span>
+              <input type="number" data-path="report.author_limit" step="1" min="0" max="50">
+              <small class="hint" data-i18n="report.author_limit_hint"></small>
+            </label>
+          </div>
+          <div class="card-body grid grid-3">
+            <label class="field field-check">
+              <input type="checkbox" data-path="report.include_daily_highlights">
+              <span class="label" data-i18n="report.include_daily_highlights"></span>
+            </label>
+            <label class="field field-check">
+              <input type="checkbox" data-path="report.include_abstract_note">
+              <span class="label" data-i18n="report.include_abstract_note"></span>
+            </label>
+            <label class="field field-check">
+              <input type="checkbox" data-path="report.keep_raw_xml">
+              <span class="label" data-i18n="report.keep_raw_xml"></span>
+            </label>
+            <label class="field field-check">
+              <input type="checkbox" data-path="report.keep_html">
+              <span class="label" data-i18n="report.keep_html"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="report.themes"></h2>
+            <p class="muted" data-i18n="report.themes_desc"></p>
+          </div>
+          <div class="card-body">
+            <div class="check-grid" id="theme-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 6. 界面与语言 ---------- -->
+      <section class="view" id="view-language">
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="lang.title"></h2>
+            <p class="muted" data-i18n="lang.desc"></p>
+          </div>
+          <div class="card-body grid grid-2">
+            <label class="field">
+              <span class="label" data-i18n="lang.ui_language"></span>
+              <select id="ui-language" data-path="ui_language">
+                <option value="zh-CN">中文（简体）</option>
+                <option value="en">English</option>
+              </select>
+              <small class="hint" data-i18n="lang.hint"></small>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="web.title"></h2>
+            <p class="muted" data-i18n="web.desc"></p>
+          </div>
+          <div class="card-body grid grid-3">
+            <label class="field">
+              <span class="label" data-i18n="web.host"></span>
+              <input type="text" data-path="web.host" spellcheck="false" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="web.port"></span>
+              <input type="number" data-path="web.port" step="1" min="1" max="65535">
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="web.password"></span>
+              <input type="password" data-path="web.password" autocomplete="new-password">
+              <small class="hint" data-i18n="web.password_hint"></small>
+            </label>
+            <label class="field field-check">
+              <input type="checkbox" data-path="web.open_browser">
+              <span class="label" data-i18n="web.open_browser"></span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 7. 运行状态 ---------- -->
+      <section class="view" id="view-status">
+        <div class="card">
+          <div class="card-head row-between">
+            <div>
+              <h2 data-i18n="status.title"></h2>
+              <p class="muted" data-i18n="status.desc"></p>
+            </div>
+            <button class="btn btn-ghost" id="btn-refresh" data-i18n="action.refresh"></button>
+          </div>
+          <div class="card-body">
+            <div class="stat-grid" id="stat-grid"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2 data-i18n="status.reports_table"></h2></div>
+          <div class="card-body table-wrap">
+            <table class="table" id="reports-table">
+              <thead>
+                <tr>
+                  <th data-i18n="status.col_day"></th>
+                  <th data-i18n="status.col_category"></th>
+                  <th data-i18n="status.col_count"></th>
+                  <th data-i18n="status.col_revision"></th>
+                  <th data-i18n="status.col_generated"></th>
+                  <th data-i18n="status.col_pdf"></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2 data-i18n="status.runs"></h2></div>
+          <div class="card-body">
+            <ul class="kv-list" id="runs-list"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- 全局保存按钮与提示 -->
+<button class="fab" id="save-fab" data-i18n="action.save"></button>
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "grqc-daily-mathjax",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MathJax 预渲染：把 arXiv 标题里的 LaTeX 公式转成自包含 SVG（可选依赖）",
+  "license": "MIT",
+  "dependencies": {
+    "mathjax-full": "^3.2.2"
+  }
+}
