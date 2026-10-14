@@ -68,8 +68,8 @@ def build_category_report(
     if lang == "zh-en":
         lang = "zh"           # 正文以中文为主，小标题由 render 追加英文
 
-    taxonomy = load_taxonomy_raw(cfg.data_dir / "theme_taxonomy.json")
-    labels, order = load_theme_taxonomy(cfg.data_dir / "theme_taxonomy.json")
+    taxonomy = load_taxonomy_raw(cfg.data_asset("theme_taxonomy.json"))
+    labels, order = load_theme_taxonomy(cfg.data_asset("theme_taxonomy.json"))
 
     highlights, theme_notes, model = "", {}, ""
     bilingual = cfg.get("report_language", "zh") == "zh-en"

@@ -276,9 +276,27 @@ class Config:
         v = (self._data["paths"].get("publish_dir") or "").strip()
         return self.resolve(v) if v else None
 
+    def data_asset(self, name: str) -> Path:
+        """随仓库分发的数据文件（分类表、主题表等）。
+
+        优先 GRQC_HOME/data，其次项目内的 data/。
+        这样即使把 GRQC_HOME 指到项目外（部署/容器常见做法），
+        随仓库带来的数据资产也仍然可用。
+        """
+        p = self.data_dir / name
+        if p.exists():
+            return p
+        return PROJECT_ROOT / "data" / name
+
     @property
     def assets_dir(self) -> Path:
-        """随仓库分发的静态资产永远在项目内，不随 GRQC_HOME 移动。"""
+        """随仓库分发的静态资产（字体、MathJax）永远在项目内，不随 GRQC_HOME 移动。
+
+        允许用 GRQC_ASSETS 覆盖，方便把字体放到别处（例如容器里挂载）。
+        """
+        env = os.environ.get("GRQC_ASSETS", "").strip()
+        if env:
+            return Path(env).expanduser().resolve()
         return PROJECT_ROOT / "assets"
 
     @property

@@ -144,7 +144,7 @@ def collect_month(cfg: Config, store: Store, month: str) -> MonthlyData:
     cats = [s["category"] for s in cfg.get("subscriptions", []) if s.get("category")] or None
     rows = store.month_digests(start, end, cats)
 
-    labels, _order = load_theme_taxonomy(cfg.data_dir / "theme_taxonomy.json")
+    labels, _order = load_theme_taxonomy(cfg.data_asset("theme_taxonomy.json"))
     data = MonthlyData(month=month)
     for r in rows:
         r = dict(r)
@@ -386,7 +386,7 @@ def render_monthly_html(cfg: Config, data: MonthlyData, *, scope_name: str) -> s
     bilingual = lang == "zh-en"
     if lang not in ("zh", "en"):
         lang = "zh"
-    labels, _order = load_theme_taxonomy(cfg.data_dir / "theme_taxonomy.json")
+    labels, _order = load_theme_taxonomy(cfg.data_asset("theme_taxonomy.json"))
     reg, bold = resolve_fonts(cfg)
     tz = cfg["schedule"].get("timezone", "Asia/Shanghai")
     generated = dt.datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d %H:%M %Z")
@@ -506,7 +506,7 @@ def run_monthly(
         say("  该月没有日报摘要，跳过（请先用 run.py daily 生成当月日报）")
         return []
 
-    labels, order = load_theme_taxonomy(cfg.data_dir / "theme_taxonomy.json")
+    labels, order = load_theme_taxonomy(cfg.data_asset("theme_taxonomy.json"))
     if use_llm:
         client = LLMClient(cfg, store)
         if client.ready:

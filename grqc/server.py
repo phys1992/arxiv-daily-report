@@ -35,9 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 只读元数据
 # ---------------------------------------------------------------------------
 def load_categories(cfg: Config) -> dict[str, str]:
-    p = cfg.data_dir / "arxiv_categories.json"
-    if not p.exists():
-        p = PROJECT_ROOT / "data" / "arxiv_categories.json"
+    p = cfg.data_asset("arxiv_categories.json")
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
@@ -45,9 +43,7 @@ def load_categories(cfg: Config) -> dict[str, str]:
 
 
 def load_themes(cfg: Config) -> list[dict]:
-    p = cfg.data_dir / "theme_taxonomy.json"
-    if not p.exists():
-        p = PROJECT_ROOT / "data" / "theme_taxonomy.json"
+    p = cfg.data_asset("theme_taxonomy.json")
     try:
         return json.loads(p.read_text(encoding="utf-8")).get("themes", [])
     except Exception:  # noqa: BLE001

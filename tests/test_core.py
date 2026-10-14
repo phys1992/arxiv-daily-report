@@ -257,6 +257,35 @@ class ConfigTest(HermeticTestCase):
 
         self.assertTrue(_is_source_checkout(), "本仓库应被判定为源码检出")
 
+    def test_data_asset_falls_back_to_project(self):
+        """GRQC_HOME 指到项目外时，随仓库的分类表/主题表仍要能找到。"""
+        import tempfile as _tf
+
+        with _tf.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "config.json",
+                         overrides={"paths": {"data": td}})
+            self.assertEqual(cfg.data_dir, Path(td))
+            cats = cfg.data_asset("arxiv_categories.json")
+            themes = cfg.data_asset("theme_taxonomy.json")
+            self.assertTrue(cats.exists(), "分类表应回退到项目 data/")
+            self.assertTrue(themes.exists(), "主题表应回退到项目 data/")
+            self.assertEqual(cats.parent, PROJECT / "data")
+            # 自己目录里有的优先
+            own = Path(td) / "theme_taxonomy.json"
+            own.write_text('{"themes": []}', encoding="utf-8")
+            self.assertEqual(cfg.data_asset("theme_taxonomy.json"), own)
+
+    def test_assets_dir_honours_env_override(self):
+        import os as _os
+
+        from grqc.config import Config as _C
+
+        _os.environ["GRQC_ASSETS"] = "/tmp/grqc-assets-test"
+        try:
+            self.assertEqual(str(_C(path=Path("/tmp/x.json")).assets_dir), "/tmp/grqc-assets-test")
+        finally:
+            _os.environ.pop("GRQC_ASSETS", None)
+
     def test_relative_paths_resolve_against_home(self):
         p = self.cfg.resolve("reports")
         self.assertTrue(p.is_absolute())
