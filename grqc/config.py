@@ -76,7 +76,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "page_size": 100,
         "request_interval_sec": 3.0,   # arXiv ToU：每 3 秒最多 1 次请求
         "timeout_sec": 60,
-        "user_agent": "",              # 空则自动生成（含项目地址）
+        "user_agent": "",              # 空则按 contact 自动生成
+        "contact": "",                 # 建议填写邮箱或仓库地址，便于 arXiv 联系你
         "max_pages": 60,
     },
     # ---- 大模型 ----
@@ -126,6 +127,43 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def _env_overrides() -> dict[str, Any]:
+    """环境变量覆盖（便于容器/CI 部署，避免把密钥或密码写进文件）。
+
+    支持：
+      GRQC_HOME            可变状态根目录（在 home_dir() 中处理）
+      GRQC_WEB_PASSWORD    Web 访问密码（绑定非回环地址时必需）
+      GRQC_WEB_HOST / GRQC_WEB_PORT
+      GRQC_PROVIDER / GRQC_MODEL / GRQC_BASE_URL
+      GRQC_REPORT_LANGUAGE / GRQC_UI_LANGUAGE
+    """
+    out: dict[str, Any] = {}
+    web: dict[str, Any] = {}
+    if os.environ.get("GRQC_WEB_PASSWORD"):
+        web["password"] = os.environ["GRQC_WEB_PASSWORD"]
+    if os.environ.get("GRQC_WEB_HOST"):
+        web["host"] = os.environ["GRQC_WEB_HOST"]
+    if os.environ.get("GRQC_WEB_PORT"):
+        try:
+            web["port"] = int(os.environ["GRQC_WEB_PORT"])
+        except ValueError:
+            pass
+    if web:
+        out["web"] = web
+    llm: dict[str, Any] = {}
+    for env, field in (("GRQC_PROVIDER", "provider"), ("GRQC_MODEL", "model"),
+                       ("GRQC_BASE_URL", "base_url")):
+        if os.environ.get(env):
+            llm[field] = os.environ[env]
+    if llm:
+        out["llm"] = llm
+    for env, field in (("GRQC_REPORT_LANGUAGE", "report_language"),
+                       ("GRQC_UI_LANGUAGE", "ui_language")):
+        if os.environ.get(env):
+            out[field] = os.environ[env]
+    return out
+
+
 class Config:
     """配置对象。读写 JSON，原子落盘，密钥分离存储。"""
 
@@ -148,6 +186,10 @@ class Config:
             except Exception as exc:  # 配置损坏时不静默吞掉
                 raise RuntimeError(f"配置文件解析失败 {self.path}: {exc}") from exc
         self._data = _deep_merge(DEFAULT_CONFIG, raw)
+        # 环境变量优先级高于文件，便于容器部署
+        env_patch = _env_overrides()
+        if env_patch:
+            self._data = _deep_merge(self._data, env_patch)
         if self.secrets_path.exists():
             try:
                 self._secrets = json.loads(self.secrets_path.read_text(encoding="utf-8"))

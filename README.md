@@ -26,6 +26,8 @@
 | **Web 配置界面** | 模型/调度/路径/语言/分类订阅全部可视化配置，改完即时生效 |
 | **多模型支持** | DeepSeek、Kimi(Moonshot)、OpenAI、Claude(Anthropic)，以及任意**本地 OpenAI 兼容服务** |
 | **可迁移** | 全部路径相对项目根，支持 `GRQC_HOME` 重定位；无绝对路径硬编码 |
+| **测试** | 43 项离线测试（含用本地 mock 验证的两种模型协议适配） |
+| **安全** | 默认仅监听回环地址；对外绑定时强制密码；密钥掩码回显、`secrets.json` 权限 600 |
 
 ---
 
@@ -65,6 +67,7 @@ reports/
 | **常驻守护 + Web 界面** | 一台长期开机的机器 | `.venv/bin/python run.py daemon`（定时逻辑在进程内，Web 改时间即时生效） |
 | **systemd 用户服务** | Linux 桌面/服务器，开机自启 | `packaging/systemd/install-service.sh` |
 | **GitHub Actions** | 不想本地安装 | 仓库 Secrets 填 `DEEPSEEK_API_KEY`，`.github/workflows/daily.yml` 每天 11:00 UTC（北京 19:00）自动跑 |
+| **Docker + 密码** | 部署到服务器 | `-e GRQC_WEB_PASSWORD=...`（绑定 `0.0.0.0` 时必需，否则拒绝启动） |
 | **Docker** | 全平台一致 | `docker build -t grqc-daily . && docker run ...`（见 `Dockerfile`） |
 
 > **Apple Silicon / Windows 提示**：WeasyPrint 依赖 pango。macOS 用 `brew install pango`；
@@ -92,7 +95,7 @@ python run.py status                                           # 运行状态
 
 ```jsonc
 {
-  "report_language": "zh",              // zh | en | zh-en
+  "report_language": "zh",              // zh | en | zh-en（中英对照会各跑一遍模型）
   "subscriptions": [                    // 订阅哪些分类
     { "category": "gr-qc", "enabled": true, "report_name": "", "out_dir": "" }
   ],
@@ -149,11 +152,49 @@ Base URL 填例如 `http://127.0.0.1:11434/v1`，密钥可留空。
 
 ---
 
+## 测试
+
+```bash
+.venv/bin/python -m unittest discover -s tests -t . -v
+```
+
+43 项测试，**全部离线**（不需要密钥、不访问网络）：
+
+| 覆盖范围 | 说明 |
+|---|---|
+| `ModelsTest` | arXiv ID 解析、北京时间跨日边界、作者截断、引用条目 |
+| `AssignTest` | 交叉列表归属的三种策略 |
+| `StoreTest` | 去重、策略过滤、摘要持久化、公式缓存、报告版本号 |
+| `MathTest` | 公式抽取、Unicode 降级转换、无 MathJax 时的回退 |
+| `ConfigTest` | 默认值、存取往返、**密钥掩码不泄漏明文**、`secrets.json` 权限 600 |
+| `RenderTest` | 字体嵌入、**字符覆盖自检**、分类表与主题表完整性 |
+| `BilingualTest` | 中英对照的合并逻辑与版式 |
+| `LLMAdapterTest` | **用本地 mock 服务器**验证 OpenAI 与 Anthropic 两种线上协议的请求构造与响应解析 |
+
+---
+
+## 环境变量
+
+容器或 CI 部署时可以完全用环境变量覆盖配置，不必写文件：
+
+| 变量 | 作用 |
+|---|---|
+| `GRQC_HOME` | 可变状态（配置/密钥/数据/报告）的根目录 |
+| `GRQC_WEB_PASSWORD` | Web 访问密码（绑定非回环地址时**必需**） |
+| `GRQC_WEB_HOST` / `GRQC_WEB_PORT` | 监听地址与端口 |
+| `GRQC_PROVIDER` / `GRQC_MODEL` / `GRQC_BASE_URL` | 覆盖模型服务商与模型名 |
+| `GRQC_REPORT_LANGUAGE` / `GRQC_UI_LANGUAGE` | 报告语言 / 界面语言 |
+| `DEEPSEEK_API_KEY` 等 | 各厂商密钥（优先级高于 `secrets.json`） |
+
+---
+
 ## 数据来源与合规
 
 - 论文元数据来自 **arXiv API**。元数据以 **CC0 1.0** 发布，可自由存储、转换与分享。
 - 遵守 arXiv 使用条款：**每 3 秒至多 1 次请求**、单连接、携带可识别 User-Agent；
   本项目**不下载也不转存 PDF 全文**，报告中一律链接到 arXiv 摘要页。
+- **建议在配置里填写 `fetch.contact`**（你的邮箱或仓库地址），它会出现在 User-Agent 中，
+  便于 arXiv 在流量异常时联系你：`grqc-daily/0.1.0 (arXiv API client; you@example.com)`。
 - 本项目与 arXiv.org **无任何官方关联**。
 - 详见 [arXiv API Terms of Use](https://info.arxiv.org/help/api/tou.html)。
 

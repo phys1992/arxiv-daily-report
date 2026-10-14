@@ -31,7 +31,19 @@ NS = {
     "arxiv": "http://arxiv.org/schemas/atom",
     "os": "http://a9.com/-/spec/opensearch/1.1/",
 }
-API_VERSION = "grqc-daily/1.0 (+https://github.com/)"
+UA_NAME = "grqc-daily"
+
+
+def default_user_agent(contact: str = "") -> str:
+    """构造可识别的 User-Agent。
+
+    arXiv 使用条款要求请求方可被识别，建议把自己的邮箱或仓库地址填到
+    config 的 fetch.contact，方便对方在流量异常时联系你。
+    """
+    from . import __version__
+
+    tail = f"; {contact.strip()}" if contact and contact.strip() else ""
+    return f"{UA_NAME}/{__version__} (arXiv API client{tail})"
 
 
 class ArxivError(RuntimeError):

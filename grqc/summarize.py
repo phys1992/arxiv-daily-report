@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from .i18n import REPORT
 from .llm.client import LLMClient, LLMError
 from .models import Paper
 
@@ -147,6 +146,47 @@ def summarize_day(
         log.warning("有 %d 篇论文没有拿到摘要（将保留元数据条目）", len(missing))
     res.ok = bool(res.papers) or bool(res.highlights)
     return res
+
+
+def summarize_day_bilingual(
+    client: LLMClient,
+    papers: list[Paper],
+    *,
+    category: str,
+    day: str,
+    taxonomy: list[dict],
+) -> DaySummary:
+    """中英对照：中英各跑一遍，再按论文合并（仅在用户选择 zh-en 时使用，成本翻倍）。"""
+    zh = summarize_day(client, papers, category=category, day=day, taxonomy=taxonomy, lang="zh")
+    en = summarize_day(client, papers, category=category, day=day, taxonomy=taxonomy, lang="en")
+    if zh.ok and not en.ok:
+        return zh
+    if en.ok and not zh.ok:
+        return en
+    if not (zh.ok or en.ok):
+        return DaySummary(model=zh.model, ok=False, error=f"{zh.error} | {en.error}")
+
+    merged = DaySummary(model=f"{zh.model}（中英对照）", ok=True)
+    merged.highlights = _join_paragraphs(zh.highlights, en.highlights)
+    codes = list(dict.fromkeys(list(zh.theme_notes) + list(en.theme_notes)))
+    for code in codes:
+        merged.theme_notes[code] = _join_paragraphs(
+            zh.theme_notes.get(code, ""), en.theme_notes.get(code, "")
+        )
+    for p in papers:
+        a = zh.papers.get(p.uid) or {}
+        b = en.papers.get(p.uid) or {}
+        summary = _join_paragraphs(a.get("summary", ""), b.get("summary", ""))
+        themes = a.get("themes") or b.get("themes") or ["other"]
+        merged.papers[p.uid] = {"summary": summary, "themes": themes}
+    return merged
+
+
+def _join_paragraphs(a: str, b: str) -> str:
+    a, b = (a or "").strip(), (b or "").strip()
+    if a and b:
+        return f"{a}\n{b}"
+    return a or b
 
 
 def apply_summary(papers: list[Paper], summary: DaySummary) -> None:

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hmac
 import html
 import json
 import logging
@@ -208,26 +209,107 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             if not self._authed():
-                self.send_error(403, "需要访问令牌：请使用启动时打印的带 ?token=... 的地址")
+                # 设了密码就给出登录页，否则提示用启动时打印的带令牌地址
+                if self._password():
+                    self._serve_login()
+                else:
+                    self.send_error(403, "需要访问令牌：请使用启动时打印的带 ?token=... 的地址")
                 return
             self._static("index.html")
+            return
+        if path == "/login":
+            self._serve_login()
             return
         if path.startswith("/reports/"):
             self._report_file(path[len("/reports/"):])
             return
         if path.startswith("/api/"):
             if not self._authed():
-                self._json({"error": "unauthorized"}, 403)
+                self._json({"error": "unauthorized", "need_login": bool(self._password())}, 401)
                 return
             self._api_get(path[len("/api/"):])
             return
         self._static(path)
 
     def do_POST(self) -> None:  # noqa: N802
-        if not self.path.startswith("/api/") or not self._authed():
-            self._json({"error": "unauthorized"}, 403)
+        if not self.path.startswith("/api/"):
+            self._json({"error": "not found"}, 404)
             return
-        self._api_post(self.path[len("/api/"):], self._read_json())
+        route = self.path[len("/api/"):]
+        if route == "login":                       # 登录接口本身不需要令牌
+            self._handle_login(self._read_json())
+            return
+        if not self._authed():
+            self._json({"error": "unauthorized", "need_login": bool(self._password())}, 401)
+            return
+        self._api_post(route, self._read_json())
+
+    # -- 口令鉴权 ----------------------------------------------------------
+    def _password(self) -> str:
+        return (self.cfg["web"].get("password") or "").strip()
+
+    def _serve_login(self, error: str = "") -> None:
+        """极简登录页（内联，不依赖静态资源）。"""
+        msg = (
+            f'<p class="err">{html.escape(error)}</p>' if error
+            else '<p class="hint">请输入配置中设置的 Web 访问密码。</p>'
+        )
+        page = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>grqc-daily 登录</title><style>
+body{{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+background:#f4f6f9;font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC",
+"Microsoft YaHei",sans-serif;color:#1c2431}}
+.box{{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:28px 30px;
+width:340px;box-shadow:0 6px 24px rgba(20,30,50,.08)}}
+h1{{font-size:17px;margin:0 0 4px}}p{{margin:0 0 16px;font-size:12.5px;color:#66748a}}
+input{{width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #cfd8e3;
+border-radius:6px;font-size:13px;font-family:inherit}}
+button{{width:100%;margin-top:12px;padding:9px;border:0;border-radius:6px;background:#4a9eff;
+color:#fff;font-size:13px;cursor:pointer;font-family:inherit}}
+.err{{color:#c0392b}}.hint{{color:#66748a}}</style></head><body>
+<form class="box" method="post" action="/login" id="f">
+<h1>grqc-daily</h1>{msg}
+<input type="password" name="password" id="p" placeholder="Web 访问密码" autofocus autocomplete="current-password">
+<button type="submit">进入配置界面</button></form>
+<script>
+document.getElementById('f').addEventListener('submit',function(e){{
+  e.preventDefault();
+  fetch('/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{password:document.getElementById('p').value}})}})
+    .then(function(r){{return r.json().then(function(d){{return {{ok:r.ok,d:d}};}});}})
+    .then(function(res){{
+      if(res.ok){{location.href='/index.html';}}
+      else{{document.querySelector('.err,.hint').outerHTML='<p class="err">密码错误</p>';}}
+    }})
+    .catch(function(){{document.querySelector('.err,.hint').outerHTML='<p class="err">无法连接服务</p>';}});
+}});
+</script></body></html>"""
+        data = page.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_login(self, body: dict) -> None:
+        expect = self._password()
+        given = str(body.get("password") or "")
+        if not expect:
+            self._json({"ok": True, "note": "未设置密码"}, 200)
+            return
+        if given and hmac.compare_digest(given, expect):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Set-Cookie", f"grqc_token={self.token}; Path=/; SameSite=Strict; HttpOnly")
+            payload = b'{"ok":true}'
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        time.sleep(0.4)          # 轻微延时，降低暴力破解速度
+        self._json({"ok": False, "error": "密码错误"}, 401)
 
     # -- API -------------------------------------------------------------
     def _api_get(self, route: str) -> None:

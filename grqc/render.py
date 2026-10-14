@@ -43,6 +43,7 @@ class ReportContext:
     font_regular: Path | None = None
     font_bold: Path | None = None
     notice: str = ""
+    bilingual: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +66,14 @@ def load_theme_taxonomy(path: Path) -> tuple[dict[str, tuple[str, str]], list[st
     if "other" not in order:
         order.append("other")
     return labels, order
+
+
+def font_stack() -> str:
+    """正文字体栈：内置思源黑体 → 内置 DejaVu → 系统常见中文字体 → 兜底。"""
+    return (
+        '"GRQC Sans", "GRQC Latin", "Source Han Sans SC", "Noto Sans CJK SC", '
+        '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif'
+    )
 
 
 def font_css(assets_dir: Path, regular: Path | None, bold: Path | None) -> str:
@@ -94,11 +103,14 @@ def font_css(assets_dir: Path, regular: Path | None, bold: Path | None) -> str:
                 f'@font-face{{font-family:{latin};font-weight:{weight};font-style:normal;'
                 f'src:url("{f.resolve().as_uri()}") format("truetype");}}'
             )
-    stack = (
-        f'{fam}, {latin}, "Source Han Sans SC", "Noto Sans CJK SC", "Noto Sans SC", '
-        '"PingFang SC", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif'
+    stack = font_stack()
+    # 同时设在 html 上：@page 的页眉页脚不会继承 body，必须由边距框自己声明，
+    # 否则页码会用系统默认字体（在中文 Linux 上会变成宋体），与正文不一致。
+    return (
+        "\n".join(faces)
+        + f"\nhtml{{font-family:{stack};}}"
+        + f"\nbody{{font-family:{stack};}}"
     )
-    return "\n".join(faces) + f"\nbody{{font-family:{stack};}}"
 
 
 def resolve_fonts(cfg) -> tuple[Path | None, Path | None]:
@@ -164,8 +176,9 @@ def base_css(header_text: str, footer_text: str) -> str:
   size: A4;
   margin: 18mm 16mm 20mm 16mm;
   @bottom-center {{ content: "第 " counter(page) " 页 / 共 " counter(pages) " 页";
-                    font-size: 8.5pt; color: #666; }}
-  @top-right {{ content: "{header_text}"; font-size: 8.5pt; color: #999; }}
+                    font-family: {font_stack()}; font-size: 8.5pt; color: #666; }}
+  @top-right {{ content: "{header_text}"; font-family: {font_stack()};
+                font-size: 8.5pt; color: #999; }}
 }}
 @page :first {{ @top-right {{ content: ""; }} }}
 * {{ box-sizing: border-box; }}
@@ -193,12 +206,20 @@ h3 {{ font-size: 11pt; margin: 4mm 0 1mm; bookmark-level: 2; }}
                bookmark-level: 2; }}
 .theme-note {{ color: #45505f; font-size: 10pt; margin-bottom: 2mm; }}
 .stats {{ text-align: center; color: #3c4a5e; font-size: 10pt; margin-bottom: 5mm; }}
+.en-label {{ font-weight: 400; font-size: 0.78em; color: #7a8698; }}
 """
 
 
 # ---------------------------------------------------------------------------
 # 片段
 # ---------------------------------------------------------------------------
+def heading(lang: str, key: str, bilingual: bool = False) -> str:
+    """章节标题；中英对照模式下追加英文小标题。"""
+    if bilingual:
+        return (f"{rt('zh', key)}<span class='en-label'>&nbsp;/&nbsp;{rt('en', key)}</span>")
+    return rt(lang, key)
+
+
 def _p(text: str) -> str:
     """把模型输出的多行文本转成若干 <p>。"""
     lines = [ln.strip() for ln in (text or "").splitlines()]
@@ -233,7 +254,12 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
     parts.append("</style></head><body>")
 
     # 标题
-    parts.append(f"<h1>{html.escape(rt(lang, 'report.title', name=ctx.category_name))}</h1>")
+    if ctx.bilingual:
+        t = (f"{ctx.category_name} 论文日报"
+             f"<span class='en-label'>&nbsp;/&nbsp;Daily Digest</span>")
+        parts.append(f"<h1>{t}</h1>")
+    else:
+        parts.append(f"<h1>{html.escape(rt(lang, 'report.title', name=ctx.category_name))}</h1>")
     parts.append(
         f"<div class='sub'>{html.escape(rt(lang, 'report.subtitle', day=ctx.day, generated=generated))}</div>"
     )
@@ -251,7 +277,7 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
 
     # 今日要点
     if ctx.highlights:
-        parts.append(f"<h2>{html.escape(rt(lang, 'report.highlights'))}</h2>")
+        parts.append(f"<h2>{heading(lang, 'report.highlights', ctx.bilingual)}</h2>")
         parts.append(f"<div class='lead'>{_p(ctx.highlights)}</div>")
 
     # 分类速览
@@ -261,7 +287,7 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
     ordered = [c for c in ctx.theme_order if c in groups] + [c for c in groups if c not in ctx.theme_order]
 
     if ctx.theme_notes or len(ordered) > 1:
-        parts.append(f"<h2>{html.escape(rt(lang, 'report.themes'))}</h2>")
+        parts.append(f"<h2>{heading(lang, 'report.themes', ctx.bilingual)}</h2>")
         for code in ordered:
             item = groups.get(code) or []
             label = (ctx.theme_labels.get(code) or (code, code))[0 if lang == "zh" else 1]
@@ -275,7 +301,7 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
                 parts.append(f"<div class='theme-note'>{_p(note)}</div>")
 
     # 论文清单
-    parts.append(f"<h2>{html.escape(rt(lang, 'report.papers'))}</h2>")
+    parts.append(f"<h2>{heading(lang, 'report.papers', ctx.bilingual)}</h2>")
     index: dict[str, int] = {}
     counter = 0
     for code in ordered:
@@ -302,7 +328,7 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
             parts.append("</div>")
 
     # 参考文献
-    parts.append(f"<h2>{html.escape(rt(lang, 'report.references'))}</h2>")
+    parts.append(f"<h2>{heading(lang, 'report.references', ctx.bilingual)}</h2>")
     for p in papers:
         i = index.get(p.uid, 0)
         parts.append(f"<div class='ref'>{html.escape(p.citation(i))}</div>")

@@ -66,19 +66,30 @@ def build_category_report(
     tz_name = cfg["schedule"].get("timezone", "Asia/Shanghai")
     lang = cfg.get("report_language", "zh")
     if lang == "zh-en":
-        lang = "zh"
+        lang = "zh"           # 正文以中文为主，小标题由 render 追加英文
 
     taxonomy = load_taxonomy_raw(cfg.data_dir / "theme_taxonomy.json")
     labels, order = load_theme_taxonomy(cfg.data_dir / "theme_taxonomy.json")
 
     highlights, theme_notes, model = "", {}, ""
+    bilingual = cfg.get("report_language", "zh") == "zh-en"
     if use_llm and papers:
         client = LLMClient(cfg, store)
         if client.ready:
-            say(f"  调用模型 {client.describe()} 生成摘要（{len(papers)} 篇）…")
-            summary = summarize_day(
-                client, papers, category=category, day=day, taxonomy=taxonomy, lang=lang
+            say(
+                f"  调用模型 {client.describe()} 生成摘要（{len(papers)} 篇"
+                + ("，中英对照需两遍）…" if bilingual else "）…")
             )
+            if bilingual:
+                from .summarize import summarize_day_bilingual
+
+                summary = summarize_day_bilingual(
+                    client, papers, category=category, day=day, taxonomy=taxonomy
+                )
+            else:
+                summary = summarize_day(
+                    client, papers, category=category, day=day, taxonomy=taxonomy, lang=lang
+                )
             if summary.ok:
                 apply_summary(papers, summary)
                 highlights, theme_notes, model = summary.highlights, summary.theme_notes, summary.model
@@ -122,6 +133,7 @@ def build_category_report(
         late_additions=int((extra or {}).get("late_additions", 0)),
         font_regular=reg,
         font_bold=bold,
+        bilingual=(cfg.get("report_language", "zh") == "zh-en"),
         notice=str((extra or {}).get("notice", "")),
     )
     html_text = render_daily_html(ctx, math)

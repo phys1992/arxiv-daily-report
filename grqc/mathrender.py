@@ -45,7 +45,7 @@ _SYMBOLS = {
     r"\otimes": "⊗", r"\dagger": "†", r"\ell": "ℓ", r"\hbar": "ℏ", r"\perp": "⊥",
     r"\parallel": "∥", r"\angle": "∠", r"\circ": "∘", r"\star": "⋆", r"\ast": "∗",
     r"\mathcal{N}": "𝒩", r"\mathcal{O}": "𝒪", r"\mathcal{L}": "ℒ", r"\mathcal{H}": "ℋ",
-    r"\mathrm{d}": "d", r"\text{d}": "d", r"\, ": " ", r"\;": " ", r"\ ": " ", r"\!": "",
+    r"\mathrm{d}": "d", r"\text{d}": "d", r"\,": " ", r"\;": " ", r"\ ": " ", r"\!": "",
     r"\quad": " ", r"\qquad": "  ", r"\{": "{", r"\}": "}", r"\%": "%", r"\&": "&",
 }
 _SUP = str.maketrans("0123456789+-=()ni", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ")

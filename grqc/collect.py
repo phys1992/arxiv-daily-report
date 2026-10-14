@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from .arxiv_client import ArxivClient, beijing_day_window
+from .arxiv_client import ArxivClient, beijing_day_window, default_user_agent
 from .config import Config
 from .models import Paper
 from .store import Store
@@ -98,7 +98,7 @@ def collect(
         timeout_sec=fetch.get("timeout_sec", 60),
         page_size=fetch.get("page_size", 100),
         max_pages=fetch.get("max_pages", 60),
-        user_agent=fetch.get("user_agent", ""),
+        user_agent=(fetch.get("user_agent") or default_user_agent(fetch.get("contact", ""))),
         retries=sched.get("retry", 3),
         raw_dir=raw_dir,
     )

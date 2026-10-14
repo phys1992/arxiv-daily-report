@@ -57,6 +57,11 @@ class MonthlyData:
     prev_month_count: int = 0
 
 
+def _join(a: str, b: str) -> str:
+    a, b = (a or "").strip(), (b or "").strip()
+    return f"{a}\n{b}" if a and b else (a or b)
+
+
 def month_range(month: str, tz: str = "Asia/Shanghai") -> tuple[str, str]:
     y, m = (int(x) for x in month.split("-"))
     start = dt.date(y, m, 1)
@@ -268,7 +273,13 @@ def render_monthly_html(
     # 统计
     delta = len(data.papers) - data.prev_month_count
     pct = (delta / data.prev_month_count * 100) if data.prev_month_count else 0
-    parts.append("<h2>" + ("当月统计" if lang == "zh" else "Statistics") + "</h2>")
+    bilingual = cfg.get("report_language", "zh") == "zh-en"
+
+    def h2(zh: str, en: str) -> str:
+        label = f"{zh} / {en}" if bilingual else (zh if lang == "zh" else en)
+        return "<h2>" + label + "</h2>"
+
+    parts.append(h2("当月统计", "Statistics"))
     parts.append("<table class='stat-table'><tr>"
                  + ("<th>指标</th><th>数值</th>" if lang == "zh" else "<th>Metric</th><th>Value</th>")
                  + "</tr>")
@@ -291,14 +302,14 @@ def render_monthly_html(
 
     # 总览
     if data.overview:
-        parts.append("<h2>" + ("月度总览" if lang == "zh" else "Monthly overview") + "</h2>")
+        parts.append(h2("月度总览", "Monthly overview"))
         for line in data.overview.splitlines():
             if line.strip():
                 parts.append(f"<p>{html.escape(line.strip())}</p>")
 
     # 分主题总结
     if data.theme_notes:
-        parts.append("<h2>" + ("分类总结" if lang == "zh" else "Thematic summaries") + "</h2>")
+        parts.append(h2("分类总结", "Thematic summaries"))
         for code in order:
             if code not in data.theme_notes:
                 continue
@@ -309,7 +320,7 @@ def render_monthly_html(
                     parts.append(f"<p>{html.escape(line.strip())}</p>")
 
     # 论文清单 + 参考文献
-    parts.append("<h2>" + ("当月论文清单" if lang == "zh" else "Papers this month") + "</h2>")
+    parts.append(h2("当月论文清单", "Papers this month"))
     index: dict[str, int] = {}
     counter = 0
     for code in order:
@@ -326,7 +337,7 @@ def render_monthly_html(
                 f"　<span style='color:#6b7787'>arXiv:{p.arxiv_id} · {html.escape(p.primary_category)}"
                 f" · {p.day_str('Asia/Shanghai')}</span></div>"
             )
-    parts.append("<h2>" + rt(lang, "report.references") + "</h2>")
+    parts.append("<h2>" + rt(lang, "report.references") + (" / References" if bilingual else "") + "</h2>")
     for code in order:
         for p in data.by_theme.get(code) or []:
             i = index.get(p.uid, 0)
@@ -374,10 +385,21 @@ def run_monthly(
                 )
                 data = collect_month(cfg, store, month)      # 重新分组建模
 
-            say(f"  调用模型 {client.describe()} 生成月度综述")
-            monthly_llm(client, data, lang=cfg.get("report_language", "zh"),
-                        labels=labels, order=order, progress=say)
-            data.model = client.describe()
+            target_lang = cfg.get("report_language", "zh")
+            say(f"  调用模型 {client.describe()} 生成月度综述"
+                + ("（中英对照需两遍）" if target_lang == "zh-en" else ""))
+            if target_lang == "zh-en":
+                monthly_llm(client, data, lang="zh", labels=labels, order=order, progress=say)
+                en_data = collect_month(cfg, store, month)
+                monthly_llm(client, en_data, lang="en", labels=labels, order=order, progress=say)
+                data.overview = _join(data.overview, en_data.overview)
+                for code, note in en_data.theme_notes.items():
+                    data.theme_notes[code] = _join(data.theme_notes.get(code, ""), note)
+                data.model = f"{client.describe()}（中英对照）"
+            else:
+                monthly_llm(client, data, lang=target_lang,
+                            labels=labels, order=order, progress=say)
+                data.model = client.describe()
         else:
             say("  未配置模型密钥，输出统计版月报")
 
