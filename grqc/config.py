@@ -214,7 +214,7 @@ class Config:
                 f"状态目录不可写：{self.home}\n"
                 f"  原因：{exc}\n"
                 "  解决：设置环境变量 GRQC_HOME 指向一个可写目录，例如：\n"
-                "        export GRQC_HOME=\$HOME/grqc-daily-data"
+                "        export GRQC_HOME=" + "$HOME/grqc-daily-data"
             ) from exc
 
     def load(self) -> "Config":
