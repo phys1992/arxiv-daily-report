@@ -1,0 +1,65 @@
+# nfpm 打包配置模板。由 packaging/build-packages.sh 渲染出具体的 yaml 再调用 nfpm。
+# 模板中的两个依赖占位符（见下方 depends / recommends）会按发行版替换成实际包名。
+#
+# 为什么用模板：nfpm v2 的 deb/rpm/archlinux 段不支持分别声明依赖，
+# 而三种发行版的包名并不相同（Debian/Fedora 是 python3，Arch 是 python），
+# 且只有 Arch 有官方 weasyprint 包。
+#
+# 三种发行版统一使用下列路径（不用各发行版的 python3.X/site-packages，
+# 这样同一个包在 Debian / Fedora / Arch 上通用）：
+#   /usr/lib/arxiv-daily-report/           Python 包
+#   /usr/share/arxiv-daily-report/data/    分类表、主题表
+#   /usr/share/arxiv-daily-report/web/     Web 配置界面静态文件
+#   /usr/share/arxiv-daily-report/assets/  MathJax 渲染脚本
+#   /usr/bin/arxiv-daily-report            命令入口
+#   /usr/lib/systemd/user/                 systemd 用户服务
+name: arxiv-daily-report
+arch: amd64
+platform: linux
+version: ${VERSION}
+version_schema: semver
+release: "1"
+section: utils
+priority: optional
+maintainer: arxiv-daily-report contributors
+vendor: arxiv-daily-report
+homepage: https://github.com/
+license: MIT
+description: |
+  arXiv 论文日报：按分类抓取新增论文，用大模型生成摘要，输出排版好的 PDF 日报，
+  并在每月 1 号依据当月日报浓缩一份月度简报。
+  .
+  支持 arXiv 全部 155 个分类的多订阅；Web 界面配置模型、调度、路径与语言。
+  字体使用系统字体（西文用系统的西文字体，汉字优先思源黑体）。
+  PDF 由 WeasyPrint 生成，请见 README 的安装说明。
+depends:
+@DEPENDS@
+recommends:
+@RECOMMENDS@
+contents:
+  - src: dist/pkgroot/arxiv_daily_report
+    dst: /usr/lib/arxiv-daily-report/arxiv_daily_report
+  # 只装随程序分发的两个数据文件；data/ 下还有运行期产物
+  # （state.sqlite3、raw/ 原始响应），绝不能打进安装包
+  - src: data/arxiv_categories.json
+    dst: /usr/share/arxiv-daily-report/data/arxiv_categories.json
+  - src: data/theme_taxonomy.json
+    dst: /usr/share/arxiv-daily-report/data/theme_taxonomy.json
+  - src: web
+    dst: /usr/share/arxiv-daily-report/web
+  - src: assets/mathjax/render.js
+    dst: /usr/share/arxiv-daily-report/assets/mathjax/render.js
+  - src: assets/mathjax/package.json
+    dst: /usr/share/arxiv-daily-report/assets/mathjax/package.json
+  - src: dist/pkgroot/arxiv-daily-report
+    dst: /usr/bin/arxiv-daily-report
+    file_info:
+      mode: 0755
+  - src: packaging/systemd/arxiv-daily-report.service
+    dst: /usr/lib/systemd/user/arxiv-daily-report.service
+  - src: README.md
+    dst: /usr/share/doc/arxiv-daily-report/README.md
+  - src: config.example.json
+    dst: /usr/share/doc/arxiv-daily-report/config.example.json
+  - src: LICENSE
+    dst: /usr/share/licenses/arxiv-daily-report/LICENSE

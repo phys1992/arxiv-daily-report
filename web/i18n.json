@@ -3,8 +3,7 @@
     "app.title": "arXiv 论文日报配置",
     "app.root": "配置根目录",
     "app.loading": "正在加载配置…",
-    "app.footer": "grqc-daily · 本地配置界面",
-
+    "app.footer": "arxiv-daily-report · 本地配置界面",
     "nav.llm": "大模型设置",
     "nav.schedule": "更新与调度",
     "nav.subscriptions": "分类订阅",
@@ -12,7 +11,6 @@
     "nav.report": "报告内容",
     "nav.language": "界面与语言",
     "nav.status": "运行状态",
-
     "action.save": "保存",
     "action.reload": "重新载入",
     "action.getModels": "获取模型列表",
@@ -20,12 +18,10 @@
     "action.runNow": "立即生成报告",
     "action.refresh": "刷新",
     "action.remove": "移除",
-
     "common.unsaved": "有未保存的修改",
     "common.saving": "保存中…",
     "common.none": "（无）",
     "common.unset": "（未设置）",
-
     "llm.title": "服务商与凭据",
     "llm.desc": "API Key 只以掩码回显，留空即保持原有密钥不变。",
     "llm.provider": "服务商",
@@ -42,7 +38,6 @@
     "llm.api_key_source_none": "当前未配置密钥",
     "llm.save_keys": "把密钥保存到 secrets.json",
     "llm.save_keys_hint": "关闭后只从环境变量读取密钥（更适合共享环境）。",
-
     "llm.params": "调用参数",
     "llm.params_desc": "控制模型请求的采样与并发行为。",
     "llm.temperature": "温度 temperature",
@@ -54,7 +49,6 @@
     "llm.disable_thinking_hint": "DeepSeek 等厂商的结构化摘要无需思维链，关闭可省钱提速。",
     "llm.fallback_provider": "降级服务商",
     "llm.fallback_model": "降级模型",
-
     "llm.test": "连接测试",
     "llm.test_desc": "使用当前填写的服务商 / 地址 / 模型 / 密钥发起一次探测。",
     "llm.testing": "正在测试连接…",
@@ -62,7 +56,6 @@
     "llm.models_none": "接口未返回模型列表",
     "llm.test_ok": "连接成功 · 延迟 {ms} ms · {msg}",
     "llm.test_fail": "连接失败：{msg}",
-
     "schedule.title": "调度设置",
     "schedule.desc": "决定程序自动运行的时机；手动模式只在点击「立即生成报告」时运行。",
     "schedule.mode": "调度模式",
@@ -83,7 +76,6 @@
     "schedule.use_llm": "使用大模型生成中文摘要",
     "schedule.use_llm_hint": "取消勾选则只生成元数据版报告，不消耗 token。",
     "schedule.log": "任务日志",
-
     "subs.tree_title": "arXiv 分类",
     "subs.tree_desc": "勾选需要订阅的分类，取消勾选即移除对应订阅。",
     "subs.search": "搜索分类代码或名称…",
@@ -108,7 +100,6 @@
     "subs.crosslist.primary": "仅主分类（primary）",
     "subs.crosslist.all": "每个相关分类都收录（all）",
     "subs.crosslist.combined_dedup": "合并去重（combined_dedup）",
-
     "paths.title": "路径与存储",
     "paths.desc": "相对路径按配置根目录解析，绝对路径原样使用。",
     "paths.reports": "报告目录 reports",
@@ -118,7 +109,6 @@
     "paths.publish": "发布目录 publish_dir",
     "paths.publish_hint": "例如 Seafile / 网盘同步目录；留空则不发布。",
     "paths.resolved": "实际解析路径",
-
     "report.title": "报告外观与内容",
     "report.desc": "控制 PDF 的语言、字体、公式渲染与内容取舍。",
     "report.language": "报告语言",
@@ -144,12 +134,10 @@
     "report.themes": "主题分类表",
     "report.themes_desc": "不勾选任何主题时使用 data/theme_taxonomy.json 的默认全集。",
     "report.themes_empty": "未获取到主题表。",
-
     "lang.title": "界面语言",
     "lang.desc": "切换后立即生效，并写入配置的 ui_language。",
     "lang.ui_language": "界面语言",
     "lang.hint": "中文 / English，只影响本配置界面，不影响报告语言。",
-
     "web.title": "Web 服务",
     "web.desc": "配置界面的监听地址与访问密码（修改后需重启服务生效）。",
     "web.host": "监听地址",
@@ -157,7 +145,6 @@
     "web.password": "访问密码",
     "web.password_hint": "绑到非回环地址时必须设置密码。",
     "web.open_browser": "启动时自动打开浏览器",
-
     "status.title": "运行状态",
     "status.desc": "来自后端 /api/status 的实时快照。",
     "status.target_day": "目标报告日",
@@ -184,7 +171,6 @@
     "status.runs": "最近运行",
     "status.no_runs": "暂无运行记录。",
     "status.open_pdf": "打开",
-
     "job.running": "运行中 · {kind}",
     "job.idle": "空闲",
     "job.done_ok": "已完成",
@@ -192,7 +178,6 @@
     "job.empty": "（暂无日志）",
     "job.kind.daily": "日报",
     "job.kind.monthly": "月报",
-
     "toast.saved": "已保存",
     "toast.save_failed": "保存失败",
     "toast.run_started": "任务已启动",
@@ -203,18 +188,19 @@
     "toast.conn_ok": "连接正常",
     "toast.conn_fail": "连接失败",
     "toast.lang_switched": "界面语言已切换为中文",
-
     "err.load": "加载配置失败",
     "err.save": "保存配置失败",
     "err.network": "网络请求失败",
-    "err.unauthorized": "未授权：请使用带 ?token=... 的地址重新打开页面"
+    "err.unauthorized": "未授权：请使用带 ?token=... 的地址重新打开页面",
+    "meta.portable": "便携模式",
+    "meta.system": "系统安装",
+    "meta.data": "数据"
   },
   "en": {
     "app.title": "arXiv Daily Report Settings",
     "app.root": "Config root",
     "app.loading": "Loading configuration…",
-    "app.footer": "grqc-daily · local settings UI",
-
+    "app.footer": "arxiv-daily-report · local settings UI",
     "nav.llm": "LLM",
     "nav.schedule": "Schedule",
     "nav.subscriptions": "Subscriptions",
@@ -222,7 +208,6 @@
     "nav.report": "Report",
     "nav.language": "Language",
     "nav.status": "Status",
-
     "action.save": "Save",
     "action.reload": "Reload",
     "action.getModels": "Fetch models",
@@ -230,12 +215,10 @@
     "action.runNow": "Generate now",
     "action.refresh": "Refresh",
     "action.remove": "Remove",
-
     "common.unsaved": "Unsaved changes",
     "common.saving": "Saving…",
     "common.none": "(none)",
     "common.unset": "(not set)",
-
     "llm.title": "Provider & credentials",
     "llm.desc": "API keys are only echoed as a mask; leave blank to keep the current key.",
     "llm.provider": "Provider",
@@ -252,7 +235,6 @@
     "llm.api_key_source_none": "No API key configured yet",
     "llm.save_keys": "Save keys to secrets.json",
     "llm.save_keys_hint": "When off, keys are read from environment variables only.",
-
     "llm.params": "Request parameters",
     "llm.params_desc": "Sampling and concurrency behaviour of model calls.",
     "llm.temperature": "Temperature",
@@ -264,7 +246,6 @@
     "llm.disable_thinking_hint": "Structured summaries need no chain of thought; disabling saves time and money.",
     "llm.fallback_provider": "Fallback provider",
     "llm.fallback_model": "Fallback model",
-
     "llm.test": "Connection test",
     "llm.test_desc": "Probe the provider / URL / model / key currently entered.",
     "llm.testing": "Testing connection…",
@@ -272,7 +253,6 @@
     "llm.models_none": "The endpoint returned no model list",
     "llm.test_ok": "Connected · {ms} ms · {msg}",
     "llm.test_fail": "Connection failed: {msg}",
-
     "schedule.title": "Schedule",
     "schedule.desc": "When the pipeline runs automatically; manual mode only runs on demand.",
     "schedule.mode": "Mode",
@@ -293,7 +273,6 @@
     "schedule.use_llm": "Use the LLM for summaries",
     "schedule.use_llm_hint": "Uncheck to generate a metadata-only report without spending tokens.",
     "schedule.log": "Job log",
-
     "subs.tree_title": "arXiv categories",
     "subs.tree_desc": "Tick a category to subscribe; unticking removes the subscription.",
     "subs.search": "Search category code or name…",
@@ -318,7 +297,6 @@
     "subs.crosslist.primary": "Primary category only",
     "subs.crosslist.all": "Include in every related category",
     "subs.crosslist.combined_dedup": "Combined and de-duplicated",
-
     "paths.title": "Paths & storage",
     "paths.desc": "Relative paths resolve against the config root; absolute paths are used as-is.",
     "paths.reports": "Reports directory",
@@ -328,7 +306,6 @@
     "paths.publish": "Publish directory",
     "paths.publish_hint": "e.g. a Seafile / cloud sync folder; blank disables publishing.",
     "paths.resolved": "Resolved paths",
-
     "report.title": "Report appearance & content",
     "report.desc": "Language, fonts, math rendering and content switches for the PDF.",
     "report.language": "Report language",
@@ -354,12 +331,10 @@
     "report.themes": "Theme taxonomy",
     "report.themes_desc": "With nothing ticked, the full default data/theme_taxonomy.json is used.",
     "report.themes_empty": "Theme list unavailable.",
-
     "lang.title": "UI language",
     "lang.desc": "Applies immediately and is written to ui_language.",
     "lang.ui_language": "Interface language",
     "lang.hint": "Chinese / English — affects this settings UI only, not the report language.",
-
     "web.title": "Web service",
     "web.desc": "Listen address and access password (restart the server to apply).",
     "web.host": "Host",
@@ -367,7 +342,6 @@
     "web.password": "Password",
     "web.password_hint": "Required when binding to a non-loopback address.",
     "web.open_browser": "Open the browser on start",
-
     "status.title": "Runtime status",
     "status.desc": "Live snapshot from /api/status.",
     "status.target_day": "Target day",
@@ -394,7 +368,6 @@
     "status.runs": "Recent runs",
     "status.no_runs": "No runs recorded yet.",
     "status.open_pdf": "Open",
-
     "job.running": "Running · {kind}",
     "job.idle": "Idle",
     "job.done_ok": "Finished",
@@ -402,7 +375,6 @@
     "job.empty": "(no log yet)",
     "job.kind.daily": "daily",
     "job.kind.monthly": "monthly",
-
     "toast.saved": "Saved",
     "toast.save_failed": "Save failed",
     "toast.run_started": "Job started",
@@ -413,10 +385,12 @@
     "toast.conn_ok": "Connection OK",
     "toast.conn_fail": "Connection failed",
     "toast.lang_switched": "Switched to English",
-
     "err.load": "Failed to load configuration",
     "err.save": "Failed to save configuration",
     "err.network": "Network request failed",
-    "err.unauthorized": "Unauthorized: reopen the page with the ?token=... URL"
+    "err.unauthorized": "Unauthorized: reopen the page with the ?token=... URL",
+    "meta.portable": "portable",
+    "meta.system": "system install",
+    "meta.data": "data"
   }
 }

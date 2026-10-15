@@ -2,7 +2,7 @@
 
 设计约束（可迁移目录）：
   * 所有默认路径都相对项目根目录，目录整体移动/改名不影响运行；
-  * 可用环境变量 GRQC_HOME 把全部可变状态（配置、密钥、数据、报告）重定位到别处；
+  * 可用环境变量 ADR_HOME 把全部可变状态（配置、密钥、数据、报告）重定位到别处；
   * config.json / secrets.json 不入库（见 .gitignore），仓库只带 config.example.json。
 """
 from __future__ import annotations
@@ -17,43 +17,95 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# 项目根目录：grqc/config.py -> grqc/ -> 项目根
+# 项目根目录：arxiv_daily_report/config.py -> arxiv_daily_report/ -> 项目根
 # ---------------------------------------------------------------------------
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parent
 
-APP_NAME = "grqc-daily"
+APP_NAME = "arxiv-daily-report"
 
 
-def home_dir() -> Path:
-    """可变状态（配置/密钥/数据/报告）的根目录。
-
-    优先级：
-      1. GRQC_HOME 环境变量；
-      2. 源码检出（git clone / 解压 zip / pip install -e）→ 用项目根，
-         这样「整个目录拷走就能用」，符合可迁移的设计目标；
-      3. pip 安装进 site-packages 等场景 → 用用户数据目录（XDG）。
-
-    第 3 条很重要：site-packages 通常可写，但把用户数据写进去会在
-    升级/卸载时被清掉，也违反 Python 打包惯例。
-    """
-    env = os.environ.get("GRQC_HOME", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    if _is_source_checkout():
-        return PROJECT_ROOT
-    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
-    base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
+def _xdg(env_var: str, default_rel: str) -> Path:
+    v = os.environ.get(env_var, "").strip()
+    base = Path(v).expanduser() if v else Path.home() / default_rel
     return (base / APP_NAME).resolve()
 
 
+def _resolve_dir(env_single: str, xdg_var: str, xdg_default: str,
+                 portable_sub: str | None) -> Path:
+    """目录解析优先级：
+
+      1. ADR_HOME              —— 全部状态放进一个目录（便携部署）
+      2. ADR_CONFIG_HOME 等    —— 单项覆盖
+      3. 源码检出              —— 用项目根，整个目录拷走就能用
+      4. XDG 默认              —— 发行版包/pip 安装的标准位置
+    """
+    home = os.environ.get("ADR_HOME", "").strip()
+    if home:
+        root = Path(home).expanduser().resolve()
+        return root if portable_sub is None else (root / portable_sub)
+    single = os.environ.get(env_single, "").strip()
+    if single:
+        return Path(single).expanduser().resolve()
+    if _is_source_checkout():
+        return PROJECT_ROOT if portable_sub is None else (PROJECT_ROOT / portable_sub)
+    return _xdg(xdg_var, xdg_default)
+
+
+def portable_root() -> Path | None:
+    """便携模式根目录；不是便携模式则返回 None（此时走 XDG 目录）。"""
+    home = os.environ.get("ADR_HOME", "").strip()
+    if home:
+        return Path(home).expanduser().resolve()
+    if _is_source_checkout():
+        return PROJECT_ROOT
+    return None
+
+
+def config_dir() -> Path:
+    """配置目录：<ADR_HOME> | ADR_CONFIG_HOME | 项目根 | ~/.config/arxiv-daily-report"""
+    return _resolve_dir("ADR_CONFIG_HOME", "XDG_CONFIG_HOME", ".config", None)
+
+
+def data_dir() -> Path:
+    """数据目录（库、报告、原始 XML）：…/data 或 ~/.local/share/arxiv-daily-report"""
+    return _resolve_dir("ADR_DATA_HOME", "XDG_DATA_HOME", ".local/share", "data")
+
+
+def cache_dir() -> Path:
+    """缓存目录（可安全删除）：…/cache 或 ~/.cache/arxiv-daily-report"""
+    return _resolve_dir("ADR_CACHE_HOME", "XDG_CACHE_HOME", ".cache", "cache")
+
+
+def home_dir() -> Path:
+    """兼容旧调用：返回数据目录。新代码请直接用 config_dir/data_dir/cache_dir。"""
+    return data_dir()
+
+
+# 发行版包安装布局：Python 包与数据文件按 FHS 放置。
+# 前缀可用 ADR_PREFIX 覆盖（默认 /usr），便于 /usr/local、Nix 等非标准布局，
+# 也方便测试时把安装树解到临时目录验证。
+def system_prefix() -> Path:
+    return Path(os.environ.get("ADR_PREFIX", "/usr")).expanduser().resolve()
+
+
+def system_lib_dir() -> Path:
+    """Python 包所在目录，例如 /usr/lib/arxiv-daily-report。"""
+    return system_prefix() / "lib" / APP_NAME
+
+
+def system_data_dir() -> Path:
+    """数据文件目录，例如 /usr/share/arxiv-daily-report。"""
+    return system_prefix() / "share" / APP_NAME
+
+
 def _is_source_checkout() -> bool:
-    """判断当前是不是从源码目录运行的（wheel 里不含 run.py）。"""
-    if (PROJECT_ROOT / "run.py").exists():
-        return True
-    if (PROJECT_ROOT / ".git").exists():
-        return True
-    return (PROJECT_ROOT / "assets" / "fonts").is_dir()
+    """判断当前是不是从源码目录运行的。
+
+    只用 run.py / .git 判断：wheel 里也会带 data/ 目录，
+    不能拿数据文件是否存在当依据。
+    """
+    return (PROJECT_ROOT / "run.py").exists() or (PROJECT_ROOT / ".git").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -89,11 +141,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "catch_up_days": 7,            # 每次回溯天数（周末/节假日补录）
         "retry": 3,
     },
-    # ---- 路径（相对项目根或 GRQC_HOME；绝对路径原样使用）----
+    # ---- 路径（相对项目根或 ADR_HOME；绝对路径原样使用）----
     "paths": {
-        "reports": "reports",
-        "data": "data",
-        "publish_dir": "",             # 例如 Seafile 同步目录；空则不发布
+        # 留空表示自动推导：
+        #   便携模式（ADR_HOME / 源码检出）-> <home>/reports、<home>/data
+        #   安装形态                       -> <数据目录>/reports
+        "reports": "",
+        "data": "",
+        "cache": "",                   # 留空 -> 便携 <home>/cache；安装 ~/.cache/arxiv-daily-report
+        "publish_dir": "",             # 例如同步盘目录；空则不发布
     },
     # ---- 抓取 ----
     "fetch": {
@@ -157,34 +213,34 @@ def _env_overrides() -> dict[str, Any]:
     """环境变量覆盖（便于容器/CI 部署，避免把密钥或密码写进文件）。
 
     支持：
-      GRQC_HOME            可变状态根目录（在 home_dir() 中处理）
-      GRQC_WEB_PASSWORD    Web 访问密码（绑定非回环地址时必需）
-      GRQC_WEB_HOST / GRQC_WEB_PORT
-      GRQC_PROVIDER / GRQC_MODEL / GRQC_BASE_URL
-      GRQC_REPORT_LANGUAGE / GRQC_UI_LANGUAGE
+      ADR_HOME            可变状态根目录（在 home_dir() 中处理）
+      ADR_WEB_PASSWORD    Web 访问密码（绑定非回环地址时必需）
+      ADR_WEB_HOST / ADR_WEB_PORT
+      ADR_PROVIDER / ADR_MODEL / ADR_BASE_URL
+      ADR_REPORT_LANGUAGE / ADR_UI_LANGUAGE
     """
     out: dict[str, Any] = {}
     web: dict[str, Any] = {}
-    if os.environ.get("GRQC_WEB_PASSWORD"):
-        web["password"] = os.environ["GRQC_WEB_PASSWORD"]
-    if os.environ.get("GRQC_WEB_HOST"):
-        web["host"] = os.environ["GRQC_WEB_HOST"]
-    if os.environ.get("GRQC_WEB_PORT"):
+    if os.environ.get("ADR_WEB_PASSWORD"):
+        web["password"] = os.environ["ADR_WEB_PASSWORD"]
+    if os.environ.get("ADR_WEB_HOST"):
+        web["host"] = os.environ["ADR_WEB_HOST"]
+    if os.environ.get("ADR_WEB_PORT"):
         try:
-            web["port"] = int(os.environ["GRQC_WEB_PORT"])
+            web["port"] = int(os.environ["ADR_WEB_PORT"])
         except ValueError:
             pass
     if web:
         out["web"] = web
     llm: dict[str, Any] = {}
-    for env, field in (("GRQC_PROVIDER", "provider"), ("GRQC_MODEL", "model"),
-                       ("GRQC_BASE_URL", "base_url")):
+    for env, field in (("ADR_PROVIDER", "provider"), ("ADR_MODEL", "model"),
+                       ("ADR_BASE_URL", "base_url")):
         if os.environ.get(env):
             llm[field] = os.environ[env]
     if llm:
         out["llm"] = llm
-    for env, field in (("GRQC_REPORT_LANGUAGE", "report_language"),
-                       ("GRQC_UI_LANGUAGE", "ui_language")):
+    for env, field in (("ADR_REPORT_LANGUAGE", "report_language"),
+                       ("ADR_UI_LANGUAGE", "ui_language")):
         if os.environ.get(env):
             out[field] = os.environ[env]
     return out
@@ -194,8 +250,13 @@ class Config:
     """配置对象。读写 JSON，原子落盘，密钥分离存储。"""
 
     def __init__(self, path: Path | None = None, overrides: dict | None = None):
-        self.home = home_dir()
-        self.path = Path(path).expanduser() if path else self.home / "config.json"
+        self.portable = portable_root()
+        self.config_home = config_dir()
+        self.state_home = data_dir()
+        self.cache_home = cache_dir()
+        # 便携模式下 home 就是项目根/ADR_HOME，便于 compat 与状态展示
+        self.home = self.portable if self.portable is not None else self.state_home
+        self.path = Path(path).expanduser() if path else self.config_home / "config.json"
         self.secrets_path = self.path.with_name("secrets.json")
         self._data: dict[str, Any] = {}
         self._secrets: dict[str, Any] = {}
@@ -205,19 +266,22 @@ class Config:
 
     # -- 载入 / 保存 --------------------------------------------------------
     def ensure_home(self) -> None:
-        """确保状态目录存在且可写，给出可操作的报错而不是原始 traceback。"""
-        try:
-            self.home.mkdir(parents=True, exist_ok=True)
-            probe = self.home / ".write-test"
-            probe.touch()
-            probe.unlink()
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                f"状态目录不可写：{self.home}\n"
-                f"  原因：{exc}\n"
-                "  解决：设置环境变量 GRQC_HOME 指向一个可写目录，例如：\n"
-                "        export GRQC_HOME=" + "$HOME/grqc-daily-data"
-            ) from exc
+        """确保配置/数据/缓存三个目录存在且可写，给出可操作的报错。"""
+        for label, d in (("配置", self.config_home), ("数据", self.state_home),
+                         ("缓存", self.cache_home)):
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                probe = d / ".write-test"
+                probe.touch()
+                probe.unlink()
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"{label}目录不可写：{d}\n"
+                    f"  原因：{exc}\n"
+                    "  解决：用环境变量把目录重定向到可写位置，例如\n"
+                    "        export ADR_HOME=" + "$HOME/arxiv-daily-report-data\n"
+                    "        （也可分别设置 ADR_CONFIG_HOME / ADR_DATA_HOME / ADR_CACHE_HOME）"
+                ) from exc
 
     def load(self) -> "Config":
         self.ensure_home()
@@ -267,43 +331,70 @@ class Config:
 
     @property
     def reports_dir(self) -> Path:
-        return self.resolve(self._data["paths"]["reports"])
+        """报告输出目录。paths.reports 留空时：
+        便携模式 <root>/reports；安装模式 <数据目录>/reports。"""
+        v = (self._data["paths"].get("reports") or "").strip()
+        if v:
+            return self.resolve(v)
+        if self.portable is not None:
+            return (self.portable / "reports").resolve()
+        return (self.state_home / "reports").resolve()
 
     @property
     def data_dir(self) -> Path:
-        return self.resolve(self._data["paths"]["data"])
+        """库、原始 XML 等数据目录（paths.data 可覆盖）。"""
+        v = (self._data["paths"].get("data") or "").strip()
+        if v:
+            return self.resolve(v)
+        return self.state_home
+
+    @property
+    def cache_dir(self) -> Path:
+        """缓存目录（可安全删除）。"""
+        v = (self._data["paths"].get("cache") or "").strip()
+        if v:
+            return self.resolve(v)
+        return self.cache_home
 
     @property
     def publish_dir(self) -> Path | None:
         v = (self._data["paths"].get("publish_dir") or "").strip()
         return self.resolve(v) if v else None
 
+    @property
+    def web_dir(self) -> Path:
+        """Web 前端静态文件目录：项目内 web/（源码）或 /usr/share/.../web（安装包）。"""
+        local = PROJECT_ROOT / "web"
+        if local.is_dir():
+            return local
+        return system_data_dir() / "web"
+
     def data_asset(self, name: str) -> Path:
         """随仓库分发的数据文件（分类表、主题表等）。
 
-        优先 GRQC_HOME/data，其次项目内的 data/。
-        这样即使把 GRQC_HOME 指到项目外（部署/容器常见做法），
+        优先 ADR_HOME/data，其次项目内的 data/。
+        这样即使把 ADR_HOME 指到项目外（部署/容器常见做法），
         随仓库带来的数据资产也仍然可用。
         """
-        p = self.data_dir / name
-        if p.exists():
-            return p
+        for cand in (self.data_dir / name,
+                     PROJECT_ROOT / "data" / name,
+                     system_data_dir() / "data" / name):
+            if cand.exists():
+                return cand
         return PROJECT_ROOT / "data" / name
 
     @property
     def assets_dir(self) -> Path:
-        """随仓库分发的静态资产（MathJax 等）永远在项目内，不随 GRQC_HOME 移动。
-
-        允许用 GRQC_ASSETS 覆盖，方便把它放到别处（例如容器里挂载）。
+        """静态资产目录（MathJax 等）。搜索顺序：
+        ADR_ASSETS → 项目内 assets/ → /usr/share/arxiv-daily-report/assets。
         """
-        env = os.environ.get("GRQC_ASSETS", "").strip()
+        env = os.environ.get("ADR_ASSETS", "").strip()
         if env:
             return Path(env).expanduser().resolve()
-        return PROJECT_ROOT / "assets"
-
-    @property
-    def web_dir(self) -> Path:
-        return PROJECT_ROOT / "web"
+        local = PROJECT_ROOT / "assets"
+        if local.is_dir():
+            return local
+        return system_data_dir() / "assets"
 
     # -- 密钥 --------------------------------------------------------------
     # 环境变量优先级最高，其次 secrets.json

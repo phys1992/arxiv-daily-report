@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# grqc-daily 安装脚本：创建虚拟环境、安装依赖、可选安装 MathJax、生成初始配置。
+# arxiv-daily-report 安装脚本：创建虚拟环境、安装依赖、可选安装 MathJax、生成初始配置。
 #
 #   ./install.sh              # 默认：仅安装 Python 依赖
 #   ./install.sh --with-math  # 额外安装 MathJax（公式排版与 LaTeX 一致，需要 node/npm）
@@ -132,9 +132,12 @@ cat <<EOF
        .venv/bin/python run.py daily
   3) 打开配置界面
        .venv/bin/python run.py serve
-  4) 常驻定时（每工作日 19:00 自动生成）
-       .venv/bin/python run.py daemon
-     或安装用户级 systemd（见 packaging/systemd/README.md）
+  4) 开机自启（推荐用户级服务：不需要 root，也不会有权限问题）
+       ./packaging/systemd/install-service.sh
+     之后用 systemctl --user status arxiv-daily-report 查看，日志用
+       journalctl --user -u arxiv-daily-report -f
+     （不要用 sudo systemctl enable：程序需要读写你自己的 ~/.config 与
+       ~/.local/share，以 root 运行会把文件写成 root 所有）
 
 EOF
 exit $SELFCHECK

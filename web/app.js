@@ -667,9 +667,14 @@
    * ===================================================================== */
   function renderHeader() {
     var m = state.meta || {};
-    $('#config-root').textContent = m.home || '—';
-    $('#config-root').title = m.home || '';
-    $('#project-root').textContent = m.project_root ? ('· ' + m.project_root) : '';
+    var cfgDir = m.config_dir || m.home || '—';
+    $('#config-root').textContent = cfgDir;
+    $('#config-root').title = cfgDir;
+    // 副行：模式 + 数据目录（安装形态下与配置目录分离）
+    var bits = [];
+    if (m.mode) bits.push(m.mode === 'portable' ? t('meta.portable') : t('meta.system'));
+    if (m.data_dir && m.data_dir !== cfgDir) bits.push(t('meta.data') + ' ' + m.data_dir);
+    $('#project-root').textContent = bits.length ? ('· ' + bits.join(' · ')) : '';
   }
 
   function switchView(view, skipHash) {

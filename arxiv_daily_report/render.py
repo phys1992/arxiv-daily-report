@@ -100,7 +100,7 @@ def font_css(cfg) -> str:
     """
     faces: list[str] = []
     custom = resolve_font_file(cfg)
-    family = '"GRQC Custom"'
+    family = '"ADR Custom"'
     if custom is not None:
         fmt = "truetype" if custom.suffix.lower() in (".ttf", ".ttc") else "opentype"
         faces.append(

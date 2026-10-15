@@ -31,7 +31,7 @@ NS = {
     "arxiv": "http://arxiv.org/schemas/atom",
     "os": "http://a9.com/-/spec/opensearch/1.1/",
 }
-UA_NAME = "grqc-daily"
+UA_NAME = "arxiv-daily-report"
 
 
 def default_user_agent(contact: str = "") -> str:

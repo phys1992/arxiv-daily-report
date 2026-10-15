@@ -46,10 +46,12 @@ def status_dict(cfg: Config, store: Store) -> dict:
         "reports": reports,
         "runs": runs,
         "paths": {
-            "home": str(cfg.home),
-            "reports": str(cfg.reports_dir),
+            "config": str(cfg.config_home),
             "data": str(cfg.data_dir),
+            "cache": str(cfg.cache_dir),
+            "reports": str(cfg.reports_dir),
             "publish": str(cfg.publish_dir) if cfg.publish_dir else "",
+            "portable": str(cfg.portable) if cfg.portable else "",
         },
         "pdf_backends": _backends(),
     }
@@ -88,11 +90,13 @@ def next_run_time(cfg: Config) -> str:
 def render_status(cfg: Config, store: Store) -> str:
     s = status_dict(cfg, store)
     lines = [
-        "grqc-daily 运行状态",
+        "arxiv-daily-report 运行状态",
         "=" * 46,
-        f"  配置根目录      {s['paths']['home']}",
-        f"  报告目录        {s['paths']['reports']}",
+        f"  模式            {'便携（' + s['paths']['portable'] + '）' if s['paths']['portable'] else '系统安装（XDG 目录）'}",
+        f"  配置目录        {s['paths']['config']}",
         f"  数据目录        {s['paths']['data']}",
+        f"  缓存目录        {s['paths']['cache']}",
+        f"  报告目录        {s['paths']['reports']}",
         f"  发布目录        {s['paths']['publish'] or '（未设置）'}",
         f"  PDF 后端        {', '.join(s['pdf_backends']) or '（无！请安装 WeasyPrint）'}",
         "",

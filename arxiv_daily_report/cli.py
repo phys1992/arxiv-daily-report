@@ -1,4 +1,4 @@
-"""grqc-daily 命令行入口（也可通过 pipx install . 后直接调用 grqc-daily）。
+"""arxiv-daily-report 命令行入口（也可通过 pipx install . 后直接调用 arxiv-daily-report）。
 
   python run.py collect [--day YYYY-MM-DD] [--category gr-qc]
   python run.py daily   [--day YYYY-MM-DD] [--no-llm]
@@ -36,7 +36,7 @@ def get_ctx(args) -> tuple[Config, Store]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="grqc-daily", description="arXiv 论文日报系统")
+    ap = argparse.ArgumentParser(prog="arxiv-daily-report", description="arXiv 论文日报系统")
     ap.add_argument("-c", "--config", help="配置文件路径（默认 <项目根>/config.json）")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg, store = get_ctx(args)
 
     if args.cmd == "collect":
-        from grqc.collect import collect
+        from arxiv_daily_report.collect import collect
 
         res = collect(cfg, store, day=args.day, lookback_days=args.lookback, only=args.category)
         for cat, n in res.per_category.items():
@@ -79,14 +79,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "daily":
-        from grqc.report_daily import run_daily
+        from arxiv_daily_report.report_daily import run_daily
 
         paths = run_daily(cfg, store, day=args.day, only=args.category, use_llm=not args.no_llm)
         for p in paths:
             print(f"  生成：{p}")
         # 北京时间每月 1 号：顺带把上一个自然月的简报也出了
         if not args.no_monthly and args.day is None:
-            from grqc.report_monthly import run_monthly, should_run_monthly
+            from arxiv_daily_report.report_monthly import run_monthly, should_run_monthly
 
             m = should_run_monthly(cfg)
             if m:
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "monthly":
-        from grqc.report_monthly import run_monthly
+        from arxiv_daily_report.report_monthly import run_monthly
 
         paths = run_monthly(cfg, store, month=args.month, use_llm=not args.no_llm)
         for p in paths:
@@ -104,19 +104,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "serve":
-        from grqc.server import serve
+        from arxiv_daily_report.server import serve
 
         serve(cfg, store, host=args.host, port=args.port, open_browser=not args.no_open)
         return 0
 
     if args.cmd == "daemon":
-        from grqc.scheduler import run_daemon
+        from arxiv_daily_report.scheduler import run_daemon
 
         run_daemon(cfg, store)
         return 0
 
     if args.cmd == "status":
-        from grqc.status import render_status
+        from arxiv_daily_report.status import render_status
 
         print(render_status(cfg, store))
         return 0

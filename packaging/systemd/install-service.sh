@@ -10,7 +10,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-UNIT_NAME="grqc-daily.service"
+UNIT_NAME="arxiv-daily-report.service"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -30,7 +30,7 @@ VENV_PY="$PROJECT_DIR/.venv/bin/python"
 
 say "写入 $UNIT_DIR/$UNIT_NAME"
 if ! sed -e "s#@PROJECT_DIR@#$PROJECT_DIR#g" -e "s#@VENV_PY@#$VENV_PY#g" \
-        "$PROJECT_DIR/packaging/systemd/grqc-daily.service.tmpl" > "$UNIT_DIR/$UNIT_NAME" 2>/dev/null; then
+        "$PROJECT_DIR/packaging/systemd/arxiv-daily-report.service.tmpl" > "$UNIT_DIR/$UNIT_NAME" 2>/dev/null; then
   die "写入失败：$UNIT_DIR 不可写。
   常见原因：当前处在容器/沙箱里（文件系统只读），或该目录权限受限。
   请在正常的桌面终端里重新执行：

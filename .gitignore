@@ -32,3 +32,7 @@ dist/
 .DS_Store
 Thumbs.db
 *.swp
+
+# ---- 本地打包工具（nfpm 等），不入库 ----
+.tools/
+dist/

@@ -24,8 +24,9 @@
     "retry": 3
   },
   "paths": {
-    "reports": "reports",
-    "data": "data",
+    "reports": "",
+    "data": "",
+    "cache": "",
     "publish_dir": ""
   },
   "fetch": {

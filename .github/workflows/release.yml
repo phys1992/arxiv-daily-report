@@ -1,0 +1,104 @@
+name: release
+
+# 打 tag（v0.2.0 之类）自动构建 Debian / Fedora / Arch 三种安装包并发布到 Release。
+# 也可以手动触发，指定版本号（不会创建 tag，只产出工件）。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（例如 0.2.0）。留空则用 pyproject.toml 里的版本'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            V="${{ github.event.inputs.version }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "版本：$V"
+
+      - name: Install nfpm
+        run: |
+          set -euo pipefail
+          NFP_VERSION=2.48.0
+          curl -sSL --retry 3 -o /tmp/nfpm.tgz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFP_VERSION}/nfpm_${NFP_VERSION}_Linux_x86_64.tar.gz"
+          mkdir -p "$HOME/.local/bin"
+          tar xzf /tmp/nfpm.tgz -C "$HOME/.local/bin" nfpm
+          chmod +x "$HOME/.local/bin/nfpm"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/nfpm" --version
+
+      # 打包前跑一遍测试，避免把坏版本发出去
+      - name: Run tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Build packages (deb / rpm / pkg.tar.zst)
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: ./packaging/build-packages.sh
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          cp dist/*.deb dist/*.rpm dist/*.pkg.tar.zst out/
+          cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ steps.ver.outputs.version }}
+          path: out/*
+          retention-days: 90
+
+      - name: Publish to GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
+          body: |
+            ## 安装
+
+            | 发行版 | 包 |
+            |---|---|
+            | Debian / Ubuntu | `sudo apt install ./arxiv-daily-report_${{ steps.ver.outputs.version }}-1_amd64.deb` |
+            | Fedora / RHEL | `sudo dnf install ./arxiv-daily-report-${{ steps.ver.outputs.version }}-1.x86_64.rpm` |
+            | Arch / Manjaro | `sudo pacman -U ./arxiv-daily-report-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst` |
+
+            安装后（**推荐用用户级服务，不需要 root，也不会有权限问题**）：
+
+            ```bash
+            arxiv-daily-report serve            # 打开 Web 配置界面填模型密钥
+            systemctl --user enable --now arxiv-daily-report   # 开机自启、常驻生成
+            ```
+
+            在 Debian / Fedora 上还需自行安装 PDF 渲染依赖（Arch 已作为包依赖自动装上）：
+
+            ```bash
+            pip install --user weasyprint       # 或 pipx install weasyprint
+            ```
+
+            详见 README 的「依赖与安装」。

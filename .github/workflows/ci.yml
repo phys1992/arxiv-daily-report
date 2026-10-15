@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']      # tag 由 release.yml 负责
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install weasyprint
+
+      # 测试用例本身是离线的（不联网、不调用模型），只依赖标准库 + weasyprint
+      - name: Run tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Syntax check (warnings as errors)
+        run: |
+          python -W error::SyntaxWarning -m compileall -q arxiv_daily_report tests run.py
+
+  packaging:
+    # 保证任何分支上的打包流程都能跑通，避免 tag 时才发现模板坏了
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nfpm
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 3 -o /tmp/nfpm.tgz \
+            "https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_x86_64.tar.gz"
+          mkdir -p "$HOME/.local/bin"
+          tar xzf /tmp/nfpm.tgz -C "$HOME/.local/bin" nfpm
+          chmod +x "$HOME/.local/bin/nfpm"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build all three package formats
+        run: ./packaging/build-packages.sh
+      - name: Verify package layout
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, subprocess, sys
+          want = [
+              "usr/bin/arxiv-daily-report",
+              "usr/lib/systemd/user/arxiv-daily-report.service",
+              "usr/share/arxiv-daily-report/data/arxiv_categories.json",
+              "usr/share/arxiv-daily-report/web/index.html",
+          ]
+          bad = []
+          for pkg in sorted(glob.glob("dist/*")):
+              if not pkg.endswith((".deb", ".rpm", ".pkg.tar.zst")):
+                  continue
+              out = subprocess.run(["bsdtar", "tf", pkg], capture_output=True, text=True).stdout
+              for w in want:
+                  if w not in out:
+                      bad.append(f"{pkg}: 缺少 {w}")
+              for forbidden in ("state.sqlite3", "/data/raw/", "/reports/"):
+                  if forbidden in out:
+                      bad.append(f"{pkg}: 含运行期数据 {forbidden}")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print("三种安装包的布局与洁净度检查通过")
+          PY

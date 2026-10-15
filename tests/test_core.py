@@ -15,20 +15,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from grqc.collect import assign, enabled_categories, target_day  # noqa: E402
-from grqc.config import Config, DEFAULT_CONFIG  # noqa: E402
-from grqc.mathrender import MathService, unicode_math  # noqa: E402
-from grqc.models import Paper, parse_arxiv_id  # noqa: E402
-from grqc.render import font_css, font_preflight, font_stack  # noqa: E402
-from grqc.store import Store  # noqa: E402
+from arxiv_daily_report.collect import assign, enabled_categories, target_day  # noqa: E402
+from arxiv_daily_report.config import Config, DEFAULT_CONFIG  # noqa: E402
+from arxiv_daily_report.mathrender import MathService, unicode_math  # noqa: E402
+from arxiv_daily_report.models import Paper, parse_arxiv_id  # noqa: E402
+from arxiv_daily_report.render import font_css, font_preflight, font_stack  # noqa: E402
+from arxiv_daily_report.store import Store  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parent.parent
 
 # 会被 Config 读取的环境变量：测试期间必须清空，否则结果取决于开发者的机器
 _ENV_KEYS = (
-    "GRQC_HOME", "GRQC_WEB_PASSWORD", "GRQC_WEB_HOST", "GRQC_WEB_PORT",
-    "GRQC_PROVIDER", "GRQC_MODEL", "GRQC_BASE_URL",
-    "GRQC_REPORT_LANGUAGE", "GRQC_UI_LANGUAGE",
+    "ADR_HOME", "ADR_WEB_PASSWORD", "ADR_WEB_HOST", "ADR_WEB_PORT",
+    "ADR_PROVIDER", "ADR_MODEL", "ADR_BASE_URL",
+    "ADR_REPORT_LANGUAGE", "ADR_UI_LANGUAGE",
     "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY", "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY", "CUSTOM_API_KEY",
 )
@@ -212,7 +212,7 @@ class ConfigTest(HermeticTestCase):
         self.assertTrue(again.api_key("deepseek").startswith("sk-"))
 
     def test_environment_is_clean(self):
-        for k in ("DEEPSEEK_API_KEY", "GRQC_WEB_PASSWORD", "GRQC_HOME"):
+        for k in ("DEEPSEEK_API_KEY", "ADR_WEB_PASSWORD", "ADR_HOME"):
             self.assertNotIn(k, os.environ, "测试环境残留 " + k)
 
     def test_key_masking_never_leaks_plaintext(self):
@@ -229,36 +229,159 @@ class ConfigTest(HermeticTestCase):
         mode = (self.path.with_name("secrets.json").stat().st_mode) & 0o777
         self.assertEqual(mode, 0o600)
 
-    def test_home_dir_source_checkout_vs_installed(self):
-        """源码检出用项目根；pip 安装（site-packages）用用户数据目录。"""
-        import os as _os
+    def test_directory_precedence(self):
+        """ADR_HOME > 单项 ADR_*_HOME > 源码检出 > XDG 默认。"""
         from unittest import mock
 
-        from grqc import config as _cfg
+        from arxiv_daily_report import config as _cfg
 
-        # 源码检出：项目根
-        with mock.patch.object(_cfg, "_is_source_checkout", return_value=True):
-            self.assertEqual(_cfg.home_dir(), _cfg.PROJECT_ROOT)
-        # 已安装：落到 XDG 数据目录，而不是 site-packages
-        with mock.patch.object(_cfg, "_is_source_checkout", return_value=False):
-            home = _cfg.home_dir()
-            self.assertNotEqual(home, _cfg.PROJECT_ROOT)
-            self.assertEqual(home.name, _cfg.APP_NAME)
-            self.assertNotIn("site-packages", str(home))
-        # GRQC_HOME 优先级最高
-        _os.environ["GRQC_HOME"] = "/tmp/grqc-home-test"
-        try:
-            self.assertEqual(str(_cfg.home_dir()), "/tmp/grqc-home-test")
-        finally:
-            _os.environ.pop("GRQC_HOME", None)
+        def dirs(checkout=True):
+            with mock.patch.object(_cfg, "_is_source_checkout", return_value=checkout):
+                return _cfg.config_dir(), _cfg.data_dir(), _cfg.cache_dir()
+
+        # 1) 源码检出 -> 项目内
+        c, d, k = dirs()
+        self.assertEqual(c, _cfg.PROJECT_ROOT)
+        self.assertEqual(d, _cfg.PROJECT_ROOT / "data")
+        self.assertEqual(k, _cfg.PROJECT_ROOT / "cache")
+        # 2) ADR_HOME -> 全部收进一个目录
+        with mock.patch.dict(_cfg.os.environ, {"ADR_HOME": "/tmp/adr-H"}):
+            c, d, k = dirs()
+            self.assertEqual((str(c), str(d), str(k)),
+                             ("/tmp/adr-H", "/tmp/adr-H/data", "/tmp/adr-H/cache"))
+        # 3) 单项覆盖（即使处于源码检出也生效）
+        with mock.patch.dict(_cfg.os.environ,
+                             {"ADR_CONFIG_HOME": "/tmp/ac", "ADR_DATA_HOME": "/tmp/ad",
+                              "ADR_CACHE_HOME": "/tmp/ak"}):
+            self.assertEqual([str(x) for x in dirs()], ["/tmp/ac", "/tmp/ad", "/tmp/ak"])
+        # 4) 安装形态 -> XDG 默认
+        c, d, k = dirs(checkout=False)
+        self.assertEqual(c.name, _cfg.APP_NAME)
+        self.assertIn(".config", str(c))
+        self.assertIn(".local/share", str(d))
+        self.assertIn(".cache", str(k))
+        self.assertNotIn("site-packages", str(d))
+        # 5) 安装形态 + XDG 覆盖
+        with mock.patch.dict(_cfg.os.environ,
+                             {"XDG_CONFIG_HOME": "/tmp/xc", "XDG_DATA_HOME": "/tmp/xd",
+                              "XDG_CACHE_HOME": "/tmp/xk"}):
+            c, d, k = dirs(checkout=False)
+            self.assertEqual([str(x) for x in (c, d, k)],
+                             ["/tmp/xc/" + _cfg.APP_NAME, "/tmp/xd/" + _cfg.APP_NAME,
+                              "/tmp/xk/" + _cfg.APP_NAME])
+
+    def test_reports_dir_defaults(self):
+        """报告目录：便携模式在项目内，安装形态在数据目录下，显式配置最优先。"""
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        with tempfile.TemporaryDirectory() as td:
+            env = {"ADR_CONFIG_HOME": f"{td}/c", "ADR_DATA_HOME": f"{td}/d",
+                   "ADR_CACHE_HOME": f"{td}/k"}
+            clean = {k: v for k, v in _cfg.os.environ.items()
+                     if k not in ("ADR_HOME", "ADR_CONFIG_HOME", "ADR_DATA_HOME",
+                                  "ADR_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+                                  "XDG_CACHE_HOME")}
+            with mock.patch.object(_cfg, "_is_source_checkout", return_value=True), \
+                 mock.patch.dict(_cfg.os.environ, clean, clear=True):
+                cfg = _cfg.Config()
+                self.assertEqual(cfg.reports_dir, _cfg.PROJECT_ROOT / "reports")
+                self.assertEqual(cfg.data_dir, _cfg.PROJECT_ROOT / "data")
+                self.assertEqual(cfg.cache_dir, _cfg.PROJECT_ROOT / "cache")
+            with mock.patch.object(_cfg, "_is_source_checkout", return_value=False), \
+                 mock.patch.dict(_cfg.os.environ, env):
+                cfg = _cfg.Config()
+                self.assertEqual(cfg.reports_dir, Path(f"{td}/d/reports"))
+            # 显式配置优先
+            with mock.patch.dict(_cfg.os.environ, env):
+                cfg = _cfg.Config(overrides={"paths": {"reports": f"{td}/R"}})
+                self.assertEqual(cfg.reports_dir, Path(f"{td}/R"))
+
+    def test_ensure_home_reports_unwritable_dir(self):
+        """目录不可写时要指出是哪一个，并给出可操作的解决办法。"""
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        with tempfile.TemporaryDirectory() as td:
+            env = {"ADR_CONFIG_HOME": f"{td}/c", "ADR_DATA_HOME": "/proc/nope/nowhere",
+                   "ADR_CACHE_HOME": f"{td}/k"}
+            with mock.patch.object(_cfg, "_is_source_checkout", return_value=False), \
+                 mock.patch.dict(_cfg.os.environ, env):
+                with self.assertRaises(RuntimeError) as ctx:
+                    _cfg.Config()
+                msg = str(ctx.exception)
+                self.assertIn("数据目录不可写", msg)
+                self.assertIn("ADR_HOME", msg)
+
+    def test_installed_layout_discovers_system_paths(self):
+        """发行版安装布局：数据在 /usr/share/<name>/data，前端在 /usr/share/<name>/web。"""
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        with tempfile.TemporaryDirectory() as td:
+            prefix = Path(td) / "usr"
+            sysdata = prefix / "share" / _cfg.APP_NAME
+            (sysdata / "data").mkdir(parents=True)
+            (sysdata / "data" / "arxiv_categories.json").write_text('{"gr-qc":"x"}', encoding="utf-8")
+            (sysdata / "data" / "theme_taxonomy.json").write_text('{"themes":[]}', encoding="utf-8")
+            (sysdata / "web").mkdir(parents=True)
+            (sysdata / "web" / "index.html").write_text("<html></html>", encoding="utf-8")
+            env = {"ADR_PREFIX": str(prefix),
+                   "ADR_CONFIG_HOME": f"{td}/c", "ADR_DATA_HOME": f"{td}/d",
+                   "ADR_CACHE_HOME": f"{td}/k"}
+            # 把“项目根”也指到临时目录，模拟包安装后 PROJECT_ROOT 里没有 data/
+            with mock.patch.object(_cfg, "_is_source_checkout", return_value=False), \
+                 mock.patch.object(_cfg, "PROJECT_ROOT", Path(td) / "site-packages"), \
+                 mock.patch.dict(_cfg.os.environ, env):
+                cfg = _cfg.Config()
+                # 自己数据目录里没有 -> 回退到 /usr/share
+                self.assertEqual(cfg.data_asset("arxiv_categories.json"),
+                                 sysdata / "data" / "arxiv_categories.json")
+                self.assertEqual(cfg.data_asset("theme_taxonomy.json"),
+                                 sysdata / "data" / "theme_taxonomy.json")
+                self.assertEqual(cfg.web_dir, sysdata / "web")
+                self.assertTrue((cfg.web_dir / "index.html").exists())
+                # 自己数据目录里有的优先
+                own = Path(f"{td}/d/theme_taxonomy.json")
+                own.write_text('{"themes":[1]}', encoding="utf-8")
+                self.assertEqual(cfg.data_asset("theme_taxonomy.json"), own)
+            # 前缀默认值是 /usr
+            with mock.patch.dict(_cfg.os.environ, {}, clear=False):
+                _cfg.os.environ.pop("ADR_PREFIX", None)
+                self.assertEqual(str(_cfg.system_prefix()), "/usr")
+                self.assertEqual(str(_cfg.system_data_dir()),
+                                 "/usr/share/" + _cfg.APP_NAME)
+                self.assertEqual(str(_cfg.system_lib_dir()),
+                                 "/usr/lib/" + _cfg.APP_NAME)
+
+    def test_config_json_lives_in_config_dir(self):
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        with tempfile.TemporaryDirectory() as td:
+            env = {"ADR_CONFIG_HOME": f"{td}/cfg", "ADR_DATA_HOME": f"{td}/dat",
+                   "ADR_CACHE_HOME": f"{td}/cch"}
+            with mock.patch.object(_cfg, "_is_source_checkout", return_value=False), \
+                 mock.patch.dict(_cfg.os.environ, env):
+                cfg = _cfg.Config()
+                self.assertEqual(cfg.path, Path(f"{td}/cfg/config.json"))
+                self.assertEqual(cfg.secrets_path, Path(f"{td}/cfg/secrets.json"))
+                cfg.set_api_key("deepseek", "sk-x")
+                cfg.save()
+                self.assertTrue(Path(f"{td}/cfg/config.json").exists())
+                self.assertTrue(Path(f"{td}/cfg/secrets.json").exists())
 
     def test_is_source_checkout_true_in_repo(self):
-        from grqc.config import _is_source_checkout
+        from arxiv_daily_report.config import _is_source_checkout
 
         self.assertTrue(_is_source_checkout(), "本仓库应被判定为源码检出")
 
     def test_data_asset_falls_back_to_project(self):
-        """GRQC_HOME 指到项目外时，随仓库的分类表/主题表仍要能找到。"""
+        """ADR_HOME 指到项目外时，随仓库的分类表/主题表仍要能找到。"""
         import tempfile as _tf
 
         with _tf.TemporaryDirectory() as td:
@@ -278,13 +401,13 @@ class ConfigTest(HermeticTestCase):
     def test_assets_dir_honours_env_override(self):
         import os as _os
 
-        from grqc.config import Config as _C
+        from arxiv_daily_report.config import Config as _C
 
-        _os.environ["GRQC_ASSETS"] = "/tmp/grqc-assets-test"
+        _os.environ["ADR_ASSETS"] = "/tmp/adr-assets-test"
         try:
-            self.assertEqual(str(_C(path=Path("/tmp/x.json")).assets_dir), "/tmp/grqc-assets-test")
+            self.assertEqual(str(_C(path=Path("/tmp/x.json")).assets_dir), "/tmp/adr-assets-test")
         finally:
-            _os.environ.pop("GRQC_ASSETS", None)
+            _os.environ.pop("ADR_ASSETS", None)
 
     def test_relative_paths_resolve_against_home(self):
         p = self.cfg.resolve("reports")
@@ -339,7 +462,7 @@ class RenderTest(unittest.TestCase):
 
     def test_page_margin_boxes_declare_font_stack(self):
         """回归：页眉页脚不继承 body 的字体，必须显式声明。"""
-        from grqc.render import base_css
+        from arxiv_daily_report.render import base_css
 
         css = base_css("gr-qc · 2026-10-13", "")
         for box in ("@bottom-center", "@top-right"):
@@ -352,7 +475,7 @@ class RenderTest(unittest.TestCase):
         """没有中文字体时要给出可操作的告警。"""
         from unittest import mock
 
-        from grqc import render as _r
+        from arxiv_daily_report import render as _r
 
         fake = mock.Mock(return_value=mock.Mock(stdout="", returncode=0))
         with mock.patch.object(_r, "font_stack", return_value="sans-serif"):
@@ -386,12 +509,12 @@ class RenderTest(unittest.TestCase):
 
 class ScheduleHelpersTest(HermeticTestCase):
     def test_target_day_uses_offset(self):
-        cfg = Config(path=Path("/tmp/grqc-sched-test.json"))
+        cfg = Config(path=Path("/tmp/adr-sched-test.json"))
         now = dt.datetime(2026, 10, 14, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
         self.assertEqual(target_day(cfg, now), "2026-10-13")
 
     def test_enabled_categories_filters_and_dedupes(self):
-        cfg = Config(path=Path("/tmp/grqc-sched-test.json"), overrides={
+        cfg = Config(path=Path("/tmp/adr-sched-test.json"), overrides={
             "subscriptions": [
                 {"category": "gr-qc", "enabled": True},
                 {"category": "hep-th", "enabled": False},
@@ -410,7 +533,7 @@ class BilingualTest(unittest.TestCase):
     """中英对照：合并逻辑与章节标题（不消耗模型额度）。"""
 
     def test_join_paragraphs(self):
-        from grqc.summarize import _join_paragraphs
+        from arxiv_daily_report.summarize import _join_paragraphs
 
         self.assertEqual(_join_paragraphs("中文", "English"), "中文\nEnglish")
         self.assertEqual(_join_paragraphs("中文", ""), "中文")
@@ -418,7 +541,7 @@ class BilingualTest(unittest.TestCase):
         self.assertEqual(_join_paragraphs("", ""), "")
 
     def test_merge_bilingual_summaries(self):
-        from grqc.summarize import DaySummary, _join_paragraphs
+        from arxiv_daily_report.summarize import DaySummary, _join_paragraphs
 
         zh = DaySummary(model="m", ok=True, highlights="中文要点",
                         theme_notes={"blackhole": "黑洞综述"},
@@ -438,7 +561,7 @@ class BilingualTest(unittest.TestCase):
         self.assertIn("English abstract", merged.papers["a"]["summary"])
 
     def test_heading_switches_with_bilingual_flag(self):
-        from grqc.render import heading
+        from arxiv_daily_report.render import heading
 
         zh_only = heading("zh", "report.papers", False)
         self.assertEqual(zh_only, "论文清单")
@@ -448,7 +571,7 @@ class BilingualTest(unittest.TestCase):
         self.assertIn("en-label", both)
 
     def test_english_report_labels(self):
-        from grqc.render import heading
+        from arxiv_daily_report.render import heading
 
         self.assertEqual(heading("en", "report.papers", False), "Papers")
         self.assertEqual(heading("en", "report.highlights", False), "Highlights")
@@ -457,7 +580,7 @@ class BilingualTest(unittest.TestCase):
         """不调用模型，只验证双语版式能渲染出 HTML。"""
         import tempfile as _tf
 
-        from grqc.render import ReportContext, render_daily_html
+        from arxiv_daily_report.render import ReportContext, render_daily_html
 
         tmp = _tf.TemporaryDirectory()
         store = Store(Path(tmp.name) / "s.sqlite3")
@@ -493,7 +616,7 @@ class MonthlyTest(HermeticTestCase):
         return Config(path=Path(tmp) / "config.json")
 
     def test_target_month_is_previous_month(self):
-        from grqc.report_monthly import target_month
+        from arxiv_daily_report.report_monthly import target_month
 
         z = dt.timezone(dt.timedelta(hours=8))
         self.assertEqual(target_month(dt.datetime(2026, 11, 1, 19, 0, tzinfo=z)), "2026-10")
@@ -501,7 +624,7 @@ class MonthlyTest(HermeticTestCase):
         self.assertEqual(target_month(dt.datetime(2026, 1, 1, 12, 0, tzinfo=z)), "2025-12")
 
     def test_should_run_monthly_only_on_first_day(self):
-        from grqc.report_monthly import should_run_monthly
+        from arxiv_daily_report.report_monthly import should_run_monthly
 
         z = dt.timezone(dt.timedelta(hours=8))
         with tempfile.TemporaryDirectory() as td:
@@ -512,7 +635,7 @@ class MonthlyTest(HermeticTestCase):
             self.assertIsNone(should_run_monthly(cfg, dt.datetime(2026, 12, 1, 19, 0, tzinfo=z)))
 
     def test_day_label_and_validation(self):
-        from grqc.report_monthly import _valid_days, day_label
+        from arxiv_daily_report.report_monthly import _valid_days, day_label
 
         self.assertEqual(day_label("2026-10-07"), "10月7日")
         self.assertEqual(day_label("2026-10-07", "en"), "Oct 7")
@@ -523,7 +646,7 @@ class MonthlyTest(HermeticTestCase):
 
     def test_no_artificial_length_limits(self):
         """月报不设人为字数上限：准确优先，简明其次。"""
-        from grqc import report_monthly as rm
+        from arxiv_daily_report import report_monthly as rm
 
         self.assertFalse(hasattr(rm, "TOP_THEMES"), "不应再有主题条数上限")
         self.assertFalse(hasattr(rm, "_clip"), "不应再对主题要点做截断")
@@ -539,7 +662,7 @@ class MonthlyTest(HermeticTestCase):
         import json as _json
         import tempfile as _tf
 
-        from grqc.report_monthly import collect_month, monthly_llm, MonthlyData
+        from arxiv_daily_report.report_monthly import collect_month, monthly_llm, MonthlyData
 
         class FakeClient:
             ready = True
@@ -571,7 +694,7 @@ class MonthlyTest(HermeticTestCase):
             self.assertEqual(len(data.theme_notes), 14, "14 个有论文的主题都应保留")
 
     def test_collect_month_merges_multiple_categories(self):
-        from grqc.report_monthly import collect_month
+        from arxiv_daily_report.report_monthly import collect_month
 
         with tempfile.TemporaryDirectory() as td:
             store = Store(Path(td) / "s.sqlite3")
@@ -601,7 +724,7 @@ class MonthlyTest(HermeticTestCase):
                 store.close()
 
     def test_monthly_html_has_dates_and_no_reference_list(self):
-        from grqc.report_monthly import MonthlyData, render_monthly_html
+        from arxiv_daily_report.report_monthly import MonthlyData, render_monthly_html
 
         with tempfile.TemporaryDirectory() as td:
             cfg = self._cfg(td)
@@ -628,7 +751,7 @@ class MonthlyTest(HermeticTestCase):
             self.assertNotIn("arXiv:", out)
 
     def test_daily_html_drops_reference_section(self):
-        from grqc.render import ReportContext, render_daily_html
+        from arxiv_daily_report.render import ReportContext, render_daily_html
 
         with tempfile.TemporaryDirectory() as td:
             store = Store(Path(td) / "s.sqlite3")

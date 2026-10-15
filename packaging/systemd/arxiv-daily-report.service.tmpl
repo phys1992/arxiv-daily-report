@@ -1,7 +1,7 @@
 [Unit]
 # 用户级单元：放到 ~/.config/systemd/user/，用 `systemctl --user` 管理。
 # 不需要 root，且天然以你自己的身份运行，能读到本项目的 config.json / secrets.json。
-Description=arXiv 论文日报（grqc-daily）常驻调度
+Description=arXiv 论文日报（arxiv-daily-report）常驻调度
 Documentation=https://github.com/
 After=network-online.target
 
@@ -21,7 +21,7 @@ TimeoutStopSec=30
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=grqc-daily
+SyslogIdentifier=arxiv-daily-report
 
 # 可选：在此文件里放 DEEPSEEK_API_KEY=... 之类的密钥（文件不存在也不报错）
 EnvironmentFile=-@PROJECT_DIR@/.env

@@ -1,0 +1,42 @@
+[Unit]
+# 用户级单元：由发行版安装到 /usr/lib/systemd/user/。
+# 用 systemctl --user 启用，不需要 root，也不会有权限问题：
+#     systemctl --user enable --now arxiv-daily-report
+#
+# 定时逻辑在进程内部的调度器里（默认每天 19:00，Asia/Shanghai），
+# 用 Web 界面改时间即时生效，不需要重载本服务。
+Description=arXiv 论文日报（arxiv-daily-report）
+Documentation=https://github.com/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/arxiv-daily-report daemon
+
+# 卡住或崩溃时自动拉起
+Restart=always
+RestartSec=10
+
+# 状态目录是 XDG 默认位置，以当前用户身份运行即可，无需 root：
+#   ~/.config/arxiv-daily-report      配置与密钥
+#   ~/.local/share/arxiv-daily-report 数据库、报告、原始 XML
+#   ~/.cache/arxiv-daily-report       缓存（可随时删除）
+Environment=PYTHONUNBUFFERED=1
+
+# 适度加固：只限制不需要的能力，不影响写自己的 XDG 目录
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arxiv-daily-report
+
+[Install]
+WantedBy=default.target

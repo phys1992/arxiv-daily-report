@@ -124,7 +124,7 @@ JOBS = JobRunner()
 # 请求处理
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
-    server_version = "grqc-daily"
+    server_version = "arxiv-daily-report"
     cfg: Config
     store: Store
     token: str
@@ -139,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
         if params.get("token", [""])[0] == self.token:
             return True
         cookie = self.headers.get("Cookie", "")
-        m = re.search(r"grqc_token=([^;]+)", cookie)
+        m = re.search(r"adr_token=([^;]+)", cookie)
         if m and m.group(1) == self.token:
             return True
         header = self.headers.get("X-Auth-Token", "")
@@ -164,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _static(self, rel: str) -> None:
-        base = PROJECT_ROOT / "web"
+        base = self.cfg.web_dir
         path = (base / rel.lstrip("/")).resolve()
         if not str(path).startswith(str(base)) or not path.is_file():
             self.send_error(404, "not found")
@@ -200,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
             token = params.get("token", [""])[0]
             if token and token == self.token:
                 self.send_response(302)
-                self.send_header("Set-Cookie", f"grqc_token={token}; Path=/; SameSite=Strict")
+                self.send_header("Set-Cookie", f"adr_token={token}; Path=/; SameSite=Strict")
                 self.send_header("Location", "/index.html")
                 self.end_headers()
                 return
@@ -252,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         page = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>grqc-daily 登录</title><style>
+<title>arxiv-daily-report 登录</title><style>
 body{{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
 background:#f4f6f9;font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC",
 "Microsoft YaHei",sans-serif;color:#1c2431}}
@@ -265,7 +265,7 @@ button{{width:100%;margin-top:12px;padding:9px;border:0;border-radius:6px;backgr
 color:#fff;font-size:13px;cursor:pointer;font-family:inherit}}
 .err{{color:#c0392b}}.hint{{color:#66748a}}</style></head><body>
 <form class="box" method="post" action="/login" id="f">
-<h1>grqc-daily</h1>{msg}
+<h1>arxiv-daily-report</h1>{msg}
 <input type="password" name="password" id="p" placeholder="Web 访问密码" autofocus autocomplete="current-password">
 <button type="submit">进入配置界面</button></form>
 <script>
@@ -298,7 +298,7 @@ document.getElementById('f').addEventListener('submit',function(e){{
         if given and hmac.compare_digest(given, expect):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Set-Cookie", f"grqc_token={self.token}; Path=/; SameSite=Strict; HttpOnly")
+            self.send_header("Set-Cookie", f"adr_token={self.token}; Path=/; SameSite=Strict; HttpOnly")
             payload = b'{"ok":true}'
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -401,10 +401,13 @@ document.getElementById('f').addEventListener('submit',function(e){{
             p: cfg.key_source(p) for p in ("deepseek", "moonshot", "openai", "anthropic", "custom")
         }
         data["_meta"] = {
-            "home": str(cfg.home),
-            "project_root": str(PROJECT_ROOT),
-            "reports_dir": str(cfg.reports_dir),
+            "config_dir": str(cfg.config_home),
             "data_dir": str(cfg.data_dir),
+            "cache_dir": str(cfg.cache_dir),
+            "reports_dir": str(cfg.reports_dir),
+            "mode": "portable" if cfg.portable else "system",
+            "project_root": str(PROJECT_ROOT),
+            "version": __import__("arxiv_daily_report", fromlist=["__version__"]).__version__,
             "pdf_backends": _backends(),
         }
         return data
@@ -439,7 +442,7 @@ def serve(cfg: Config, store: Store, *, host: str | None = None, port: int | Non
     httpd = ThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{port}/?token={token}"
     print("=" * 68)
-    print("  grqc-daily 配置界面已启动")
+    print("  arxiv-daily-report 配置界面已启动")
     print(f"  地址：{url}")
     print("  （令牌已写入 URL，仅本进程有效；请勿分享该链接）")
     print("=" * 68)

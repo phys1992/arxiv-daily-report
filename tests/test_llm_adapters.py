@@ -18,9 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from grqc.config import Config  # noqa: E402
-from grqc.llm.client import LLMClient  # noqa: E402
-from grqc.store import Store  # noqa: E402
+from arxiv_daily_report.config import Config  # noqa: E402
+from arxiv_daily_report.llm.client import LLMClient  # noqa: E402
+from arxiv_daily_report.store import Store  # noqa: E402
 
 RECORDED: list[dict] = []
 
@@ -83,7 +83,7 @@ def tearDownModule() -> None:
 class LLMAdapterTest(unittest.TestCase):
     def setUp(self) -> None:
         RECORDED.clear()
-        self.cfg = Config(path=Path("/tmp/grqc-test-config.json"),
+        self.cfg = Config(path=Path("/tmp/adr-test-config.json"),
                           overrides={"llm": {"base_url": BASE, "model": "mock-small",
                                              "max_tokens": 256, "disable_thinking": True}})
 
@@ -137,7 +137,7 @@ class LLMAdapterTest(unittest.TestCase):
         custom.chat_json("s", "u")
         self.assertNotIn("thinking", [r for r in RECORDED if r["method"] == "POST"][-1]["body"])
 
-        cfg = Config(path=Path("/tmp/grqc-test-config.json"),
+        cfg = Config(path=Path("/tmp/adr-test-config.json"),
                      overrides={"llm": {"base_url": BASE, "model": "mock",
                                         "disable_thinking": True}})
         deep = LLMClient(cfg, None, provider_key="deepseek")
@@ -148,7 +148,7 @@ class LLMAdapterTest(unittest.TestCase):
         self.assertEqual(body.get("thinking"), {"type": "disabled"})
 
     def test_usage_recorded_in_store(self):
-        store = Store(Path("/tmp/grqc-test-state.sqlite3"))
+        store = Store(Path("/tmp/adr-test-state.sqlite3"))
         try:
             store.conn.execute("DELETE FROM token_ledger")
             store.conn.commit()
@@ -164,7 +164,7 @@ class LLMAdapterTest(unittest.TestCase):
 
     # -- 容错解析 ---------------------------------------------------------
     def test_json_parsing_tolerates_fences_and_prose(self):
-        from grqc.llm.client import _parse_json
+        from arxiv_daily_report.llm.client import _parse_json
 
         self.assertEqual(_parse_json('{"a":1}'), {"a": 1})
         self.assertEqual(_parse_json('```json\n{"a":2}\n```'), {"a": 2})
@@ -173,12 +173,12 @@ class LLMAdapterTest(unittest.TestCase):
         self.assertIsNone(_parse_json(""))
 
     def test_missing_key_reported(self):
-        cfg = Config(path=Path("/tmp/grqc-test-config.json"),
+        cfg = Config(path=Path("/tmp/adr-test-config.json"),
                      overrides={"llm": {"provider": "openai", "base_url": BASE}})
         client = LLMClient(cfg, None)
         client.api_key = ""
         self.assertFalse(client.ready)
-        from grqc.llm.client import LLMError
+        from arxiv_daily_report.llm.client import LLMError
 
         with self.assertRaises(LLMError):
             client.chat_json("s", "u")
