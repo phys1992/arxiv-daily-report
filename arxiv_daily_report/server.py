@@ -128,12 +128,13 @@ class Handler(BaseHTTPRequestHandler):
     cfg: Config
     store: Store
     token: str
+    require_token: bool = False       # 由 serve/daemon 按配置设置
 
     # -- 工具 ------------------------------------------------------------
     def log_message(self, fmt: str, *args) -> None:  # 静默默认访问日志
         log.debug("%s - %s", self.address_string(), fmt % args)
 
-    def _authed(self) -> bool:
+    def _token_ok(self) -> bool:
         q = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(q.query)
         if params.get("token", [""])[0] == self.token:
@@ -144,6 +145,69 @@ class Handler(BaseHTTPRequestHandler):
             return True
         header = self.headers.get("X-Auth-Token", "")
         return bool(header) and header == self.token
+
+    def _authed(self) -> bool:
+        """鉴权规则（默认与 v2rayA 一类本地工具一致：回环地址即信任）。
+
+          1. 带了正确令牌 -> 放行；
+          2. 设了密码     -> 必须登录；
+          3. 其余情况     -> 放行。
+        第 3 条之所以安全：对外监听时启动阶段就强制要求密码，
+        所以"没密码还能访问"只可能发生在只监听 127.0.0.1 的时候。
+        想恢复"即使是本机也必须带令牌"，把 web.require_token 设为 true。
+        """
+        if self._token_ok():
+            return True
+        if self._password():
+            return False
+        return not Handler.require_token
+
+    def _reject_host(self) -> None:
+        """Host 不合法时的 403。
+
+        注意：HTTP 状态行的原因短语历史上只能是 latin-1，塞中文会直接抛
+        UnicodeEncodeError（连接被掐断，浏览器看到"空回复"）。所以原因短语
+        一律用英文，中文说明放进 UTF-8 的响应体。
+        """
+        body = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+                "<title>403</title></head><body style=\"font-family:system-ui,sans-serif;"
+                "max-width:38rem;margin:12vh auto;line-height:1.75\">"
+                "<h1>403 拒绝访问</h1>"
+                "<p>请求的 <code>Host</code> 头不是本机地址，已拒绝。</p>"
+                "<p>这是为了防止 DNS rebinding：恶意网页可以把域名解析到 127.0.0.1，"
+                "再借浏览器访问本机的配置界面。请用 "
+                "<code>arxiv-daily-report status</code> 打印出的地址访问。</p>"
+                "</body></html>").encode("utf-8")
+        self.send_response(403, "Forbidden")
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _host_ok(self) -> bool:
+        """校验 Host 头，挡掉 DNS rebinding。
+
+        免令牌之后这一步是必需的：恶意网页可以把自己的域名解析到 127.0.0.1，
+        再用浏览器去打本机服务；此时 Host 是攻击者的域名，而正常访问只会是
+        127.0.0.1 / localhost / 配置里写的主机名。
+        """
+        raw = (self.headers.get("Host") or "").strip()
+        if not raw:
+            return True                     # HTTP/1.0 客户端可能不带 Host
+        if raw.startswith("["):             # IPv6 字面量 [::1]:8765
+            name = raw[1:raw.find("]")] if "]" in raw else raw.strip("[]")
+        elif raw.count(":") == 1:
+            name = raw.rsplit(":", 1)[0]
+        else:
+            name = raw
+        name = name.strip().lower()
+        if name in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
+            return True
+        configured = str(self.cfg["web"].get("host", "127.0.0.1")).strip().lower()
+        if configured in ("0.0.0.0", "::"):
+            return True                     # 对外监听：地址形态本来就多样，由密码把关
+        return name == configured
 
     def _json(self, obj: Any, code: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -193,6 +257,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- 路由 ------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
+        if not self._host_ok():
+            self._reject_host()
+            return
         u = urllib.parse.urlparse(self.path)
         path = u.path
         if path in ("/", "/index.html"):
@@ -205,11 +272,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             if not self._authed():
-                # 设了密码就给出登录页，否则提示用启动时打印的带令牌地址
                 if self._password():
-                    self._serve_login()
+                    self._serve_login()          # 设了密码 -> 登录页
                 else:
-                    self._serve_hint()
+                    self._serve_hint()           # 要求令牌但没带 -> 说明页
                 return
             self._static("index.html")
             return
@@ -228,6 +294,9 @@ class Handler(BaseHTTPRequestHandler):
         self._static(path)
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._host_ok():
+            self._json({"error": "bad host", "detail": "Host 头不是本机地址"}, 403)
+            return
         if not self.path.startswith("/api/"):
             self._json({"error": "not found"}, 404)
             return
@@ -458,17 +527,31 @@ def _backends() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-def web_url(cfg: Config, host: str | None = None, port: int | None = None) -> str:
-    """配置界面的完整地址（含访问令牌）。
+def token_required(cfg: Config) -> bool:
+    """是否必须带令牌才能访问。
 
-    令牌保存在 secrets.json 里，是持久化的，所以任何进程都能算出同一个地址——
-    常驻服务在后台跑时，用 `arxiv-daily-report status` 就能拿到它。
+    默认不需要——只监听回环地址时就信任本机（与 v2rayA 等本地工具一致）。
+    设了密码、或显式打开 web.require_token 时才需要。
+    """
+    if (cfg["web"].get("password") or "").strip():
+        return True
+    return bool(cfg["web"].get("require_token", False))
+
+
+def web_url(cfg: Config, host: str | None = None, port: int | None = None) -> str:
+    """配置界面地址。
+
+    不需要令牌时就是干净的 http://127.0.0.1:8765/；
+    需要时附上令牌（保存在 secrets.json，持久化，任何进程算出来都一样）。
     """
     web = cfg["web"]
     host = host or web.get("host", "127.0.0.1")
     port = int(port or web.get("port", 8765))
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    return f"http://{shown}:{port}/?token={cfg.session_token()}"
+    base = f"http://{shown}:{port}/"
+    if not token_required(cfg):
+        return base
+    return f"{base}?token={cfg.session_token()}"
 
 
 def make_server(cfg: Config, store: Store, host: str | None = None,
@@ -485,16 +568,20 @@ def make_server(cfg: Config, store: Store, host: str | None = None,
     Handler.cfg = cfg
     Handler.store = store
     Handler.token = cfg.session_token()
+    Handler.require_token = token_required(cfg)
     httpd = ThreadingHTTPServer((host, port), Handler)
     return httpd, web_url(cfg, host, port)
 
 
-def announce(url: str, *, stream=print) -> None:
+def announce(url: str, *, need_token: bool = False, stream=print) -> None:
     """把访问方式清楚地印出来（前台命令与 systemd 日志共用）。"""
     stream("=" * 68)
     stream("  arxiv-daily-report 配置界面")
     stream(f"  在浏览器里打开：{url}")
-    stream("  令牌已写入该地址，不设密码时只能用它访问（请勿分享）。")
+    if need_token:
+        stream("  该地址里的令牌是访问凭据，请勿分享。")
+    else:
+        stream("  无需令牌，直接打开即可（仅监听本机回环地址）。")
     stream("  随时可用 `arxiv-daily-report status` 重新查看这个地址。")
     stream("=" * 68)
 
@@ -515,7 +602,7 @@ def start_web_thread(cfg: Config, store: Store, host: str | None = None,
         return None
     t = threading.Thread(target=httpd.serve_forever, name="adr-web", daemon=True)
     t.start()
-    announce(url, stream=lambda m: log.info("%s", m))
+    announce(url, need_token=token_required(cfg), stream=lambda m: log.info("%s", m))
     return httpd
 
 
@@ -529,7 +616,7 @@ def serve(cfg: Config, store: Store, *, host: str | None = None, port: int | Non
             f"  可能已经有一个实例在运行；先执行 `arxiv-daily-report status` 查看地址，\n"
             f"  或用 `--port 8766` 换一个端口。"
         ) from exc
-    announce(url)
+    announce(url, need_token=token_required(cfg))
     if open_browser:
         try:
             webbrowser.open(url)

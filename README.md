@@ -149,27 +149,42 @@ journalctl --user -u arxiv-daily-report -f
 
 ### 怎么打开 Web 配置界面
 
-界面监听 `http://127.0.0.1:8765`，但**只接受带令牌的地址**（防止同机其他程序读取你的模型密钥）。
-三种拿到地址的方式，任选其一：
+**直接打开就行，不需要令牌也不需要密码：**
 
-```bash
-# ① 最省事：status 直接打印当前可用地址
-arxiv-daily-report status
-#     配置界面        http://127.0.0.1:8765/?token=xxxxxxxx
-
-# ② 常驻服务在后台跑：从日志里找
-journalctl --user -u arxiv-daily-report | grep 在浏览器里打开
-
-# ③ 临时起一个前台实例（会自动打开浏览器，Ctrl-C 退出）
-arxiv-daily-report serve
+```
+http://127.0.0.1:8765
 ```
 
-令牌持久保存在 `secrets.json` 里，所以**任何进程算出的地址都一样**——服务在后台跑着，
-你随时用 `status` 就能取回那个链接。
+界面默认只监听回环地址（`127.0.0.1`），所以采用「本机即可信」的模型——和 v2rayA、
+Transmission 这类本地工具一致。查当前地址：
 
-> 也可以给界面设个密码，之后直接打开 `http://127.0.0.1:8765` 用密码登录（不用带令牌）。
-> 在 `config.json` 里设 `web.password`，或在 Web 界面「界面设置」里填。
-> 不带令牌又没设密码时，页面会直接告诉你上面这三条命令，不会只抛一个 403。
+```bash
+arxiv-daily-report status        # 输出里有「配置界面」一行
+arxiv-daily-report serve         # 临时起一个前台实例，会自动打开浏览器
+```
+
+常驻服务（systemd）在后台跑着时，地址同样是这一行：
+
+```bash
+journalctl --user -u arxiv-daily-report | grep 在浏览器里打开
+```
+
+#### 三种访问模式
+
+| 模式 | 触发条件 | 怎么进 |
+|---|---|---|
+| **免认证**（默认） | 未设密码、`require_token=false` | 直接开 `http://127.0.0.1:8765` |
+| **令牌** | `web.require_token = true` | 用 `status` 打印的 `?token=...` 地址 |
+| **密码** | 设了 `web.password`（对外监听时强制） | 直接开，输入密码登录 |
+
+#### 安全边界
+
+- 对外监听（`web.host` 设为 `0.0.0.0` 等）时**强制要求密码**，否则拒绝启动——同网段任何人都能改你的模型密钥。
+- 免认证模式下会校验 `Host` 头，挡掉 **DNS rebinding**（恶意网页把域名解析到 127.0.0.1 再借浏览器打本机服务）。
+- 免认证只适用于「本机是可信的」这一前提。如果是多人共用的机器，建议设 `web.password`
+  或打开 `web.require_token`。
+
+想恢复「必须带令牌」：`web.require_token = true`（Web 界面「界面设置」里也有开关）。
 
 常用参数：
 

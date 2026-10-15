@@ -640,17 +640,33 @@ class WebEntryTest(HermeticTestCase):
         conf = {"web": dict({"host": "127.0.0.1", "port": 8765, "enabled": True}, **web)}
         return Config(path=Path(td) / "config.json", overrides=conf)
 
-    def test_web_url_contains_stable_token(self):
-        from arxiv_daily_report.server import web_url
+    def test_default_url_needs_no_token(self):
+        """默认只监听回环地址，直接打开就能用，地址里不带令牌。"""
+        from arxiv_daily_report.server import token_required, web_url
 
         with tempfile.TemporaryDirectory() as td:
             cfg = self._cfg(td)
+            self.assertFalse(token_required(cfg))
+            self.assertEqual(web_url(cfg), "http://127.0.0.1:8765/")
+
+    def test_require_token_opt_in_gives_stable_url(self):
+        """显式打开 require_token 后，地址带令牌且跨进程可复现。"""
+        from arxiv_daily_report.server import token_required, web_url
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td, require_token=True)
+            self.assertTrue(token_required(cfg))
             url = web_url(cfg)
             self.assertTrue(url.startswith("http://127.0.0.1:8765/?token="))
-            # 令牌持久化在 secrets.json，任何进程算出来都一样（常驻服务在后台也查得到）
             again = web_url(Config(path=Path(td) / "config.json"))
-            self.assertEqual(url, again)
+            self.assertEqual(url, again)      # 令牌持久化在 secrets.json
             self.assertGreater(len(url.split("token=")[1]), 20)
+
+    def test_password_also_requires_token(self):
+        from arxiv_daily_report.server import token_required
+
+        with tempfile.TemporaryDirectory() as td:
+            self.assertTrue(token_required(self._cfg(td, password="pw")))
 
     def test_web_url_rewrites_wildcard_host(self):
         from arxiv_daily_report.server import web_url
@@ -669,7 +685,8 @@ class WebEntryTest(HermeticTestCase):
             try:
                 out = render_status(cfg, store)
                 self.assertIn("配置界面", out)
-                self.assertIn("token=", out)
+                self.assertIn("http://127.0.0.1:8765/", out)
+                self.assertIn("无需令牌", out)
             finally:
                 store.close()
 
@@ -685,6 +702,64 @@ class WebEntryTest(HermeticTestCase):
                 self.assertIn("web.enabled", out)
             finally:
                 store.close()
+
+    def test_authed_logic_trusts_loopback_by_default(self):
+        """核心：不设密码、不开 require_token 时，回环访问放行。"""
+        from arxiv_daily_report.server import Handler
+
+        class FakeHandler(Handler):
+            def __init__(self, cfg, headers=None, path="/"):
+                self.cfg = cfg
+                self.token = cfg.session_token()
+                self.path = path
+                self.headers = headers or {}
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td)
+            self.assertTrue(FakeHandler(cfg)._authed())
+            # 打开 require_token 后必须带令牌
+            Handler.require_token = True
+            try:
+                self.assertFalse(FakeHandler(cfg)._authed())
+                self.assertTrue(FakeHandler(cfg, {"Cookie": "adr_token=" + cfg.session_token()})
+                                ._authed())
+            finally:
+                Handler.require_token = False
+            # 设了密码就必须登录
+            cfg2 = self._cfg(td, password="pw")
+            self.assertFalse(FakeHandler(cfg2)._authed())
+
+    def test_host_header_blocks_dns_rebinding(self):
+        """免令牌之后，Host 校验是防 DNS rebinding 的关键一步。"""
+        from arxiv_daily_report.server import Handler
+
+        class FakeHandler(Handler):
+            def __init__(self, cfg, host):
+                self.cfg = cfg
+                self.headers = {"Host": host}
+                self.path = "/"
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td)
+            for ok in ("127.0.0.1:8765", "localhost:8765", "127.0.0.1", "[::1]:8765"):
+                self.assertTrue(FakeHandler(cfg, ok)._host_ok(), ok)
+            for bad in ("evil.com:8765", "attacker.example", "192.168.1.9:8765"):
+                self.assertFalse(FakeHandler(cfg, bad)._host_ok(), bad)
+            # 对外监听时由密码把关，Host 形态本来就多样
+            cfg2 = self._cfg(td, host="0.0.0.0", password="pw")
+            self.assertTrue(FakeHandler(cfg2, "192.168.1.9:8765")._host_ok())
+
+    def test_no_non_ascii_reason_phrase_in_send_error(self):
+        """回归：HTTP 状态行的原因短语只能是 latin-1，塞中文会让连接被掐断。"""
+        import re as _re
+
+        src = (PROJECT / "arxiv_daily_report/server.py").read_text(encoding="utf-8")
+        for m in _re.finditer(r"send_error\(([^)]*)\)", src):
+            arg = m.group(1)
+            self.assertTrue(
+                all(ord(ch) < 128 for ch in arg),
+                f"send_error 的原因短语含非 ASCII 字符（会抛 UnicodeEncodeError）：{arg}",
+            )
 
     def test_refuses_public_bind_without_password(self):
         """对外监听又不设密码会暴露模型密钥，必须拒绝启动界面。"""

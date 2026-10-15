@@ -203,6 +203,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 8765,
         "password": "",                # 绑非回环地址时必填
+        # 默认 false：只监听回环地址时信任本机，打开 http://127.0.0.1:8765 即可用，
+        # 不需要任何令牌或密码（与 v2rayA 等本地工具一致）。
+        # 设为 true 则恢复「必须用带 ?token= 的地址访问」。
+        "require_token": False,
         "open_browser": True,
     },
 }

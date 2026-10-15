@@ -199,7 +199,9 @@
     "fulltext.max_chars_hint": "只影响送入模型的结论段长度，不影响抓取。",
     "fulltext.source": "全文来源",
     "web.enabled": "常驻时提供配置界面",
-    "web.enabled_hint": "常驻服务（daemon）在后台同时提供配置界面。关闭后只能用命令行改配置。访问地址可用 `arxiv-daily-report status` 查看。"
+    "web.enabled_hint": "常驻服务（daemon）在后台同时提供配置界面。关闭后只能用命令行改配置。访问地址可用 `arxiv-daily-report status` 查看。",
+    "web.require_token": "要求访问令牌",
+    "web.require_token_hint": "默认关闭：只监听回环地址时直接打开即可用。打开后必须用「运行状态」里给出的带 ?token= 地址访问。"
   },
   "en": {
     "app.title": "arXiv Daily Report Settings",
@@ -401,6 +403,8 @@
     "fulltext.max_chars_hint": "Only limits how much of the conclusion is sent to the model.",
     "fulltext.source": "Full-text source",
     "web.enabled": "Serve the config UI while running as a daemon",
-    "web.enabled_hint": "The daemon also serves the web UI in the background. If disabled, edit the config by hand. Run `arxiv-daily-report status` to get the URL."
+    "web.enabled_hint": "The daemon also serves the web UI in the background. If disabled, edit the config by hand. Run `arxiv-daily-report status` to get the URL.",
+    "web.require_token": "Require an access token",
+    "web.require_token_hint": "Off by default: with a loopback bind you can just open the URL. When on, you must use the ?token= URL shown in Status."
   }
 }

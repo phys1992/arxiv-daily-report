@@ -93,15 +93,18 @@ def _web_hint(cfg: Config) -> str:
 
     host = cfg["web"].get("host", "127.0.0.1")
     port = int(cfg["web"].get("port", 8765))
-    if not cfg["web"].get("enabled", True):
-        return "已在配置中关闭（web.enabled=false）"
+    if not cfg["web"].get("enabled", True) and cfg["schedule"].get("mode") != "manual":
+        return "常驻服务已关闭界面（web.enabled=false）"
+    from .server import token_required
+
     try:
         url = web_url(cfg, host, port)
     except Exception:  # noqa: BLE001
         return f"http://{host}:{port}/（令牌读取失败）"
+    tail = "" if token_required(cfg) else "  （无需令牌，直接打开）"
     if host in ("0.0.0.0", "::"):
-        return url + "  ← 注意：正在对外监听，端口 " + str(port)
-    return url
+        tail = "  ← 正在对外监听，需要密码"
+    return url + tail
 
 
 def render_status(cfg: Config, store: Store) -> str:
