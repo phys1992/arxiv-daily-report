@@ -39,3 +39,9 @@ dist/
 
 # 本地联调用的临时实例
 .webtest/
+
+# 本地渲染预览（调试用，不入库）
+.check/
+.check*.png
+cache/
+tools/
