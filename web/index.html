@@ -338,12 +338,14 @@
               </select>
             </label>
             <label class="field">
-              <span class="label" data-i18n="report.font_profile"></span>
-              <select data-path="report.font_profile">
-                <option value="source-han" data-i18n="report.font.source_han"></option>
-                <option value="system" data-i18n="report.font.system"></option>
-                <option value="custom" data-i18n="report.font.custom"></option>
-              </select>
+              <span class="label" data-i18n="report.font_family"></span>
+              <input type="text" data-path="report.font_family" spellcheck="false"
+                     autocomplete="off" data-i18n-ph="report.font_family_hint">
+              <small class="hint" data-i18n="report.font_family_note"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="report.font_file"></span>
+              <input type="text" data-path="report.font_file" spellcheck="false" autocomplete="off">
             </label>
             <label class="field">
               <span class="label" data-i18n="report.math_backend"></span>
@@ -353,13 +355,25 @@
                 <option value="unicode" data-i18n="report.math.unicode"></option>
               </select>
             </label>
-            <label class="field">
-              <span class="label" data-i18n="report.font_regular"></span>
-              <input type="text" data-path="report.font_file_regular" spellcheck="false" autocomplete="off">
+            <label class="field switch">
+              <input type="checkbox" data-path="fulltext.enabled">
+              <span>
+                <span class="label" data-i18n="fulltext.enabled"></span>
+                <small class="hint" data-i18n="fulltext.enabled_hint"></small>
+              </span>
             </label>
             <label class="field">
-              <span class="label" data-i18n="report.font_bold"></span>
-              <input type="text" data-path="report.font_file_bold" spellcheck="false" autocomplete="off">
+              <span class="label" data-i18n="fulltext.max_chars"></span>
+              <input type="number" data-path="fulltext.max_chars" min="500" max="20000" step="500">
+              <small class="hint" data-i18n="fulltext.max_chars_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="fulltext.source"></span>
+              <select data-path="fulltext.source">
+                <option value="auto">auto</option>
+                <option value="arxiv-html">arXiv HTML</option>
+                <option value="ar5iv">ar5iv</option>
+              </select>
             </label>
             <label class="field">
               <span class="label" data-i18n="report.author_limit"></span>

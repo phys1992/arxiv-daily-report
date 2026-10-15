@@ -609,6 +609,266 @@ class BilingualTest(unittest.TestCase):
             tmp.cleanup()
 
 
+SAMPLE_ARXIV_HTML = """<!doctype html><html><body><article class="ltx_document">
+<div id="abstract1" class="ltx_abstract">
+  <h6 class="ltx_title ltx_title_abstract">Abstract</h6>
+  <p class="ltx_p">We study quasibound states around <math alttext="a=Q/M">x</math> black holes.</p>
+</div>
+<section id="S1" class="ltx_section">
+  <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">I </span>Introduction</h2>
+  <div class="ltx_para"><p class="ltx_p">Massive fields are interesting.</p></div>
+</section>
+<section id="S2" class="ltx_section">
+  <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">II </span>Method</h2>
+  <div class="ltx_para"><p class="ltx_p">We solve the radial equation.</p></div>
+</section>
+<section id="S7" class="ltx_section">
+  <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">VII </span>Summary and discussion</h2>
+  <div class="ltx_para"><p class="ltx_p">We find that the spectrum is stable for <math alttext="a<0.9">y</math>.</p></div>
+</section>
+<section id="bib" class="ltx_bibliography">
+  <h2 class="ltx_title ltx_title_bibliography">References</h2>
+  <div class="ltx_para"><p class="ltx_p">[1] Someone, Conclusions of a cited paper.</p></div>
+</section>
+</article></body></html>"""
+
+
+class FullTextTest(HermeticTestCase):
+    """全文提取：摘要、结论类小节、公式还原、参考文献区排除。"""
+
+    def test_extract_text_turns_math_into_latex(self):
+        from arxiv_daily_report.fulltext import extract_text
+
+        out = extract_text('前 <math alttext="a^2+b^2">x</math> 后')
+        self.assertIn("$a^2+b^2$", out)
+        self.assertNotIn("<math", out)
+        # 没有 alttext 时不能把 MathML 拍平成乱码
+        self.assertEqual(extract_text("<p>a<math>x y z</math>b</p>"), "a b")
+
+    def test_parse_html_picks_abstract_and_conclusion(self):
+        from arxiv_daily_report.fulltext import parse_html
+
+        ft = parse_html("2610.00001", SAMPLE_ARXIV_HTML)
+        self.assertTrue(ft.has_fulltext)
+        self.assertEqual(ft.source, "arxiv-html")
+        self.assertIn("quasibound states", ft.abstract)
+        self.assertNotIn("Abstract", ft.abstract[:9])       # 摘要小标题已剔除
+        self.assertIn("$a=Q/M$", ft.abstract)
+        titles = [t for t, _ in ft.conclusions]
+        self.assertEqual(titles, ["Summary and discussion"])   # 罗马数字已去掉
+        self.assertIn("$a<0.9$", ft.conclusions[0][1])
+
+    def test_parse_html_ignores_references_section(self):
+        """参考文献里出现的 'Conclusions' 不能被抓成本文结论。"""
+        from arxiv_daily_report.fulltext import parse_html
+
+        ft = parse_html("x", SAMPLE_ARXIV_HTML)
+        self.assertNotIn("References", ft.section_titles)
+        self.assertNotIn("cited paper", " ".join(b for _t, b in ft.conclusions))
+
+    def test_parse_html_without_conclusion_falls_back(self):
+        from arxiv_daily_report.fulltext import parse_html
+
+        html = ('<div class="ltx_abstract"><p class="ltx_p">Only an abstract here.</p></div>'
+                '<section class="ltx_section"><h2 class="ltx_title ltx_title_section">'
+                '<span class="ltx_tag">I </span>Introduction</h2><p>body</p></section>')
+        ft = parse_html("x", html)
+        self.assertFalse(ft.has_fulltext)
+        self.assertEqual(ft.source, "abstract-only")
+        self.assertIn("Only an abstract", ft.abstract)
+
+    def test_conclusion_text_respects_budget(self):
+        from arxiv_daily_report.fulltext import FullText
+
+        ft = FullText(arxiv_id="x", conclusions=[("Conclusions", "字" * 5000)])
+        # 预算之内不截断，超出才截
+        self.assertLessEqual(len(ft.conclusion_text(300)), 320)
+        self.assertEqual(ft.conclusion_text(6000).count("字"), 5000)
+        # 解析阶段本身也有单节上限（_MAX_TEXT）
+        from arxiv_daily_report.fulltext import _MAX_TEXT
+
+        self.assertLessEqual(_MAX_TEXT, 8000)
+
+    def test_is_conclusion_matches_common_headings(self):
+        from arxiv_daily_report.fulltext import _is_conclusion
+
+        for t in ("Conclusions", "Conclusion", "Summary", "Discussion",
+                  "Summary and discussion", "Concluding remarks", "Outlook",
+                  "Results and discussion", "结论", "讨论与总结"):
+            self.assertTrue(_is_conclusion(t), t)
+        for t in ("Introduction", "Method", "References", "Acknowledgements"):
+            self.assertFalse(_is_conclusion(t), t)
+
+    def test_prefers_real_conclusion_over_intro_summary(self):
+        """有真正的结论节时不要用「引言兼小结」，否则预算花在引言上。"""
+        from arxiv_daily_report.fulltext import parse_html
+
+        def sec(t, body="text " * 60):
+            return (f'<section class="ltx_section"><h2 class="ltx_title ltx_title_section">'
+                    f'<span class="ltx_tag">X </span>{t}</h2><p>{body}</p></section>')
+
+        both = ('<div class="ltx_abstract"><p>a</p></div>'
+                + sec("Introduction and Summary") + sec("II Method") + sec("VII Conclusions"))
+        ft = parse_html("x", both)
+        self.assertEqual([t for t, _ in ft.conclusions], ["Conclusions"])
+        self.assertFalse(ft.weak_section)
+
+        only = ('<div class="ltx_abstract"><p>a</p></div>'
+                + sec("Introduction and Summary") + sec("II Method"))
+        ft2 = parse_html("x", only)
+        self.assertEqual([t for t, _ in ft2.conclusions], ["Introduction and Summary"])
+        self.assertTrue(ft2.weak_section)
+
+    def test_disabled_service_returns_abstract_only(self):
+        from arxiv_daily_report.fulltext import FullTextService
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json",
+                         overrides={"fulltext": {"enabled": False}})
+            svc = FullTextService(None, cfg)
+            ft = svc.get("2610.00001")
+            self.assertFalse(ft.has_fulltext)
+            self.assertIn("关闭", ft.error)
+
+    def test_fulltext_cache_roundtrip(self):
+        from arxiv_daily_report.fulltext import FullText, FullTextService
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                cfg = Config(path=Path(td) / "c.json")
+                # 先手工写一条缓存，服务应直接命中而完全不联网
+                src = FullText(arxiv_id="2610.00001", source="arxiv-html", abstract="A",
+                               conclusions=[("Conclusions", "B")], section_titles=["Conclusions"])
+                store.save_fulltext("2610.00001", source=src.source, abstract=src.abstract,
+                                    payload=src.to_json(), error="")
+                svc = FullTextService(store, cfg)
+                ft = svc.get("2610.00001")
+                self.assertEqual(svc.stats["hit"], 1)
+                self.assertEqual(svc.stats["fetched"], 0)
+                self.assertEqual(ft.conclusions, [("Conclusions", "B")])
+                self.assertEqual(store.fulltext_stats()["with_fulltext"], 1)
+            finally:
+                store.close()
+
+
+class MonthlyCitationTest(HermeticTestCase):
+    """月报的 arXiv 号：只能引用当天日报里确实存在的论文。"""
+
+    INDEX = {
+        "2026-10-13": [{"id": "2610.17034", "title": "A"}, {"id": "2610.18521", "title": "B"}],
+        "2026-10-07": [{"id": "2610.12345", "title": "C"}],
+    }
+
+    def test_keeps_valid_id(self):
+        from arxiv_daily_report.report_monthly import sanitize_citations
+
+        out, dropped = sanitize_citations(
+            "结果（10月13日，arXiv:2610.17034）。", "2026-10", self.INDEX)
+        self.assertIn("arXiv:2610.17034", out)
+        self.assertEqual(dropped, 0)
+
+    def test_drops_invented_id(self):
+        from arxiv_daily_report.report_monthly import sanitize_citations
+
+        out, dropped = sanitize_citations(
+            "结果（10月13日，arXiv:9999.99999）。", "2026-10", self.INDEX)
+        self.assertEqual(out, "结果（10月13日）。")
+        self.assertEqual(dropped, 1)
+
+    def test_drops_id_from_wrong_day(self):
+        """号真实存在，但属于别的日期——同样要剔除。"""
+        from arxiv_daily_report.report_monthly import sanitize_citations
+
+        out, dropped = sanitize_citations(
+            "结果（10月13日，arXiv:2610.12345）。", "2026-10", self.INDEX)
+        self.assertNotIn("2610.12345", out)
+        self.assertEqual(dropped, 1)
+
+    def test_keeps_partial_validity(self):
+        from arxiv_daily_report.report_monthly import sanitize_citations
+
+        out, dropped = sanitize_citations(
+            "混（10月13日，arXiv:2610.17034，arXiv:9999.99999）。", "2026-10", self.INDEX)
+        self.assertIn("2610.17034", out)
+        self.assertNotIn("9999", out)
+        self.assertEqual(dropped, 1)
+
+    def test_id_without_date_is_dropped(self):
+        from arxiv_daily_report.report_monthly import sanitize_citations
+
+        out, dropped = sanitize_citations("（arXiv:2610.17034）", "2026-10", self.INDEX)
+        self.assertNotIn("arXiv", out)
+        self.assertEqual(dropped, 1)
+
+    def test_plain_date_citation_untouched(self):
+        from arxiv_daily_report.report_monthly import sanitize_citations
+
+        out, dropped = sanitize_citations("结果（10月13日）。", "2026-10", self.INDEX)
+        self.assertEqual(out, "结果（10月13日）。")
+        self.assertEqual(dropped, 0)
+
+    def test_version_suffix_does_not_break_matching(self):
+        """回归：存档里的 id 带版本号（2610.17034v1），正文引用写裸号，必须能匹配上。
+
+        否则校验器会把所有引用都当成编造，悄无声息地全部删掉。
+        """
+        from arxiv_daily_report.report_monthly import bare_id, sanitize_citations
+
+        idx = {"2026-10-13": [{"id": "2610.17034v1", "title": "A"}]}
+        out, dropped = sanitize_citations("（10月13日，arXiv:2610.17034）", "2026-10", idx)
+        self.assertIn("arXiv:2610.17034", out)
+        self.assertEqual(dropped, 0)
+        # 归一化后不同版本视为同一篇
+        self.assertEqual(bare_id("2610.17034v1"), bare_id("2610.17034"))
+        self.assertEqual(bare_id("2610.17034"), "2610.17034")
+
+    def test_highlight_ids_validated_against_its_days(self):
+        """主要进展的 arxiv 字段：按 days 校验，跨日期或编造的号都要剔除。"""
+        from arxiv_daily_report.report_monthly import pick_highlight_ids
+
+        idx = {"2026-10-13": [{"id": "2610.17034v1"}],
+               "2026-10-07": [{"id": "2610.12345v1"}]}
+        # 合法
+        picked, dropped = pick_highlight_ids(["2610.17034"], ["2026-10-13"], idx)
+        self.assertEqual(picked, ["2610.17034"])
+        self.assertEqual(dropped, 0)
+        # 允许 arXiv: 前缀，也允许带版本号
+        picked, _ = pick_highlight_ids(["arXiv:2610.17034v1"], ["2026-10-13"], idx)
+        self.assertEqual(picked, ["2610.17034"])
+        # 编造
+        picked, dropped = pick_highlight_ids(["9999.99999"], ["2026-10-13"], idx)
+        self.assertEqual(picked, [])
+        self.assertEqual(dropped, 1)
+        # 属于别的日期
+        picked, dropped = pick_highlight_ids(["2610.12345"], ["2026-10-13"], idx)
+        self.assertEqual(picked, [])
+        self.assertEqual(dropped, 1)
+        # 一条进展跨两天，两天的号都合法
+        picked, dropped = pick_highlight_ids(["2610.17034", "2610.12345"],
+                                             ["2026-10-13", "2026-10-07"], idx)
+        self.assertEqual(picked, ["2610.17034", "2610.12345"])
+        self.assertEqual(dropped, 0)
+        # 去重
+        picked, dropped = pick_highlight_ids(["2610.17034", "2610.17034"], ["2026-10-13"], idx)
+        self.assertEqual(picked, ["2610.17034"])
+        self.assertEqual(dropped, 1)
+
+    def test_allowed_ids_text_lists_days(self):
+        from arxiv_daily_report.report_monthly import _allowed_ids_text
+
+        text = _allowed_ids_text(self.INDEX, "2026-10", "zh")
+        self.assertIn("10月13日", text)
+        self.assertIn("2610.17034", text)
+
+    def test_linkify_makes_clickable_and_escapes(self):
+        from arxiv_daily_report.report_monthly import linkify_arxiv
+
+        out = linkify_arxiv("（10月13日，arXiv:2610.17034）")
+        self.assertIn('href="https://arxiv.org/abs/2610.17034"', out)
+        self.assertNotIn("<script>", linkify_arxiv("<script>x</script>"))
+
+
 class PackageVerifierTest(HermeticTestCase):
     """安装包校验器：必须能真正读到内层文件（deb 用 bsdtar 只能看到 ar 成员）。"""
 

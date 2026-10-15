@@ -175,6 +175,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "save_keys": True,             # False = 只从环境变量读取密钥
     },
     # ---- 报告内容 ----
+    # ---- 全文（读取论文结论/讨论小节）----
+    "fulltext": {
+        "enabled": True,               # 日报摘要是否结合论文全文的结论/讨论部分
+        "source": "auto",              # auto | arxiv-html | ar5iv
+        "max_chars": 4000,             # 每篇送入模型的结论原文上限（字符）
+        "throttle_seconds": 1.0,       # 抓取间隔，别给 arXiv 添压力
+        "timeout_seconds": 30,
+    },
     "report": {
         # 字体由系统提供（不再随仓库分发）。
         # font_family 留空则用内置默认栈：西文字体在前、中文字体在后；

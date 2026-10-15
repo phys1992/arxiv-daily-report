@@ -23,16 +23,17 @@
 | **多分类去重** | 按 arXiv ID 全局去重：同一篇论文只调用一次模型，只出现在一份报告里 |
 | **仅统计新投稿** | 只收 v1 首次公开，忽略版本更新（可配置） |
 | **北京时间自然日** | 报告日按 `Asia/Shanghai` 自然日切分；自动回溯 7 天，周末/节假日延迟公告也能补录 |
+| **结合全文** | 抓取 arXiv 官方 HTML，读取论文的**结论/讨论/总结**小节原文，与摘要一起交给模型；摘要不能只复述摘要。抓不到全文（老论文等）时如实降级为仅摘要，绝不假装读过 |
 | **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；**字体使用系统字体**——西文用系统西文字体，汉字优先思源黑体、否则用系统默认中文字体 |
 | **公式排版** | MathJax 预渲染成 SVG（与 LaTeX 输出同一套 Computer Modern 字形），按公式哈希缓存 |
 | **论文清单** | 每篇给出作者、标题、arXiv 号与可点击链接（由代码从元数据生成，模型不参与）；不再单列参考文献表 |
-| **月度简报** | **每月 1 号**（北京时间）自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**不设字数上限**，力求准确的前提下简明扼要；正文只标注日期（如（10月13日）），不出现 arXiv 号 |
+| **月度简报** | **每月 1 号**（北京时间）自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**不设字数上限**，力求准确的前提下简明扼要；**重要文献在对应日期后附 arXiv 号**（如（10月13日，arXiv:2610.17034）），号逐条核对确属该日，编造或张冠李戴的一律剔除 |
 | **Web 配置界面** | 模型/调度/路径/语言/分类订阅全部可视化配置，改完即时生效 |
 | **多模型支持** | DeepSeek、Kimi(Moonshot)、OpenAI、Claude(Anthropic)，以及任意**本地 OpenAI 兼容服务** |
 | **systemd 用户服务** | `systemctl --user` 一键开机自启，**不需要 root**，也不会有权限问题 |
 | **三种安装包** | Debian/Ubuntu 的 `.deb`、Fedora/RHEL 的 `.rpm`、Arch/Manjaro 的 `.pkg.tar.zst`，由 GitHub Actions 打 tag 自动构建发布 |
 | **XDG 目录规范** | 配置进 `~/.config`、数据进 `~/.local/share`、缓存进 `~/.cache`；也支持 `ADR_HOME` 便携模式（整个目录拷走就能用） |
-| **测试** | 63 项离线测试（含用本地 mock 验证的两种模型协议适配），不联网、不消耗模型额度 |
+| **测试** | 85 项离线测试（含用本地 mock 验证的两种模型协议适配），不联网、不消耗模型额度 |
 
 ---
 
@@ -218,7 +219,9 @@ arxiv-daily-report status                                           # 运行状�
 | 何时生成 | 每天（默认北京时间 19:00） | **每月 1 号**，覆盖上一个自然月 |
 | 数据来源 | arXiv API 的当日新增论文 | **只读当月日报的要点存档**，不回头翻原始论文 |
 | 结构 | 今日要点 + 分类速览 + 论文清单（含作者/标题/arXiv 号/链接） | 本月概览（一段） + 主要进展 + 分主题要点 |
-| 引用方式 | 论文清单里的编号 `[3]` | **只标日期**，如（10月13日）；不出现 arXiv 号 |
+| 数据来源补充 | 每篇抓一次 arXiv HTML，读出结论/讨论原文 | 复用日报存档，不再联网抓全文 |
+| 引用方式 | 论文清单里的编号 `[3]` | 标日期；**重要文献**再附 arXiv 号，如（10月13日，arXiv:2610.17034），可点击 |
+| 依据 | 全文的结论/讨论小节 + 摘要 | 当月日报的要点存档 |
 | 参考文献表 | 无（清单已含全部信息） | 无 |
 | 篇幅 | 约 5–15 页（随当日论文数） | 不设字数上限；准确优先，简明其次 |
 
@@ -262,6 +265,13 @@ arxiv-daily-report status                                           # 运行状�
     "provider": "deepseek",             // deepseek | moonshot | openai | anthropic | custom
     "model": "deepseek-flash",
     "disable_thinking": true            // 结构化摘要关闭思考模式，避免推理 token 挤占输出
+  },
+  "fulltext": {
+    "enabled": true,                    // 日报摘要是否结合全文的结论/讨论部分
+    "source": "auto",                   // auto | arxiv-html | ar5iv
+    "max_chars": 4000,                  // 每篇结论原文送入模型的上限（字符）
+    "throttle_seconds": 1.0,            // 抓取间隔，别给 arXiv 添压力
+    "timeout_seconds": 30
   },
   "report": {
     "font_family": "",                  // 空 = 内置字体栈（西文优先 + 中文回退）
@@ -338,8 +348,10 @@ git tag v0.2.0 && git push origin v0.2.0
 ## 数据来源与合规
 
 - 论文元数据来自 **arXiv API**。元数据以 **CC0 1.0** 发布，可自由存储、转换与分享。
-- 遵守 arXiv 使用条款：**每 3 秒至多 1 次请求**、单连接、携带可识别 User-Agent；
-  本项目**不下载也不转存 PDF 全文**，报告中一律链接到 arXiv 摘要页。
+- 遵守 arXiv 使用条款：**请求间隔可配置（默认 1 秒）**、携带可识别 User-Agent；
+  本项目**不下载 PDF 全文**，读全文时抓的是 arXiv 自己生成的 HTML 页面，
+  且每篇只抓一次、结果缓存在本地 sqlite，重复生成报告不会重复请求。
+  报告中一律链接到 arXiv 摘要页。
 - **建议在配置里填写 `fetch.contact`**（你的邮箱或仓库地址），它会出现在 User-Agent 中，
   便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.2.0 (arXiv API client; you@example.com)`。
 - 本项目与 arXiv.org **无任何官方关联**。
@@ -395,9 +407,14 @@ Highlights:
 - PDF with page numbers, running headers, bookmarks and clickable links. **Fonts come from the
   system**: Latin text uses the system's Latin font, CJK text prefers Source Han Sans (falling back
   to the system's default Chinese font).
+- **Reads the full text**: fetches arXiv's own HTML, extracts the Conclusion/Discussion section and
+  feeds it to the model together with the abstract, so a note cannot be a mere abstract rewrite.
+  When no HTML exists it honestly degrades to abstract-only.
 - Formula typesetting via MathJax pre-rendered to SVG (same Computer Modern outlines as LaTeX),
   cached by formula hash.
 - Paper lists (authors, title, arXiv ID, URL) are generated from metadata by code, never by the model.
+- The monthly brief attaches arXiv IDs to important work right after its digest date; every ID is
+  verified against that day's paper list, so invented or mismatched IDs are dropped.
 - Providers: DeepSeek, Kimi, OpenAI, Claude (native Anthropic Messages protocol), and any local
   OpenAI-compatible endpoint.
 - **Linux-only**, shipped as `.deb`, `.rpm` and `.pkg.tar.zst`, all installing to the same FHS

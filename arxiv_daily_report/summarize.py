@@ -11,7 +11,7 @@ from .models import Paper
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "daily-v2"   # v2: 术语精准 / 逻辑严谨 / 语法从简
+PROMPT_VERSION = "daily-v3"   # v2: 术语精准 / 逻辑严谨 / 语法从简
 
 SYSTEM_ZH = """你是一位相对论与引力领域的科研助理，负责为 arXiv 每日新增论文撰写中文速览。
 
@@ -35,7 +35,14 @@ SYSTEM_ZH = """你是一位相对论与引力领域的科研助理，负责为 a
 9. 逻辑要完整：给结论时一并给出前提或适用范围；作对比时说明比较对象。
    无法判断的内容宁可不写，不要含糊其辞。
 10. 语法从简：以短句为主，一句话只说一件事。少用长定语、嵌套从句和被动语态。
-    不用比喻、夸张和口语化表达。同一件事只说一遍。"""
+    不用比喻、夸张和口语化表达。同一件事只说一遍。
+
+依据全文的论文：
+11. 论文条目里带 "conclusion" 字段的，是原文「结论/讨论/总结」小节的正文，我已读过全文。
+    这类论文的要点必须结合摘要与结论：以结论里给出的最终结果、适用条件与定量数值为准。
+    不得只复述摘要——摘要里的预期若与结论不一致，以结论为准。
+    结论里明确否定的结论（例如"不成立""无证据"）必须如实写出，不要写成正面结果。
+12. 没有 "conclusion" 字段的论文只有摘要，按摘要写即可，不要臆测全文内容。"""
 
 SYSTEM_EN = """You are a research assistant in relativity and gravitation, writing a concise
 English digest of new arXiv papers.
@@ -56,7 +63,14 @@ Terminology and wording:
 9. Be logically complete: state the premise or scope together with any conclusion, and name the
    comparison baseline when comparing. Omit what cannot be determined rather than being vague.
 10. Keep the grammar simple: short sentences, one idea per sentence. Avoid long noun phrases,
-    nested clauses and passive voice. No metaphors, no hype, no colloquialisms."""
+    nested clauses and passive voice. No metaphors, no hype, no colloquialisms.
+
+Papers with full text:
+11. Items carrying a "conclusion" field contain the paper's own Conclusion/Discussion section,
+    i.e. I have read the full text. For those, combine the abstract and the conclusion: the
+    final results, validity conditions and numbers from the conclusion take precedence over the
+    abstract. Do not merely restate the abstract.
+12. Items without a "conclusion" field have an abstract only; do not speculate about their body."""
 
 
 @dataclass
@@ -70,23 +84,36 @@ class DaySummary:
     error: str = ""
 
 
-def build_user_prompt(papers: list[Paper], category: str, day: str, taxonomy: list[dict], lang: str) -> str:
+def build_user_prompt(papers: list[Paper], category: str, day: str, taxonomy: list[dict],
+                      lang: str, fulltexts: dict | None = None,
+                      fulltext_chars: int = 4000) -> str:
+    """构造单日摘要提示词。
+
+    fulltexts: ``uid -> FullText``（已读过全文的论文）。带 conclusion 字段的条目，
+               表示模型可以参考该论文结论/讨论小节的原文。
+    """
     theme_lines = "\n".join(
         f'- {t["code"]}: {t["zh"] if lang == "zh" else t["en"]}' for t in taxonomy
     )
     items = []
     for i, p in enumerate(papers, 1):
-        items.append(
-            {
-                "n": i,
-                "id": p.uid,
-                "title": p.title,
-                "authors": p.author_text(6),
-                "primary": p.primary_category,
-                "categories": p.categories,
-                "abstract": p.abstract[:2200],
-            }
-        )
+        item = {
+            "n": i,
+            "id": p.uid,
+            "title": p.title,
+            "authors": p.author_text(6),
+            "primary": p.primary_category,
+            "categories": p.categories,
+            "abstract": p.abstract[:2200],
+        }
+        ft = (fulltexts or {}).get(p.uid)
+        if ft is not None and getattr(ft, "has_fulltext", False):
+            body = ft.conclusion_text(fulltext_chars)
+            if body:
+                item["conclusion"] = body
+                if ft.section_titles:
+                    item["sections"] = ft.section_titles[:14]
+        items.append(item)
     header = (
         f"分类：{category}\n日期（北京时间）：{day}\n论文数量：{len(items)}\n\n"
         f"可选主题代码（每个论文只能从下列选 1–2 个）：\n{theme_lines}\n\n"
@@ -120,6 +147,8 @@ def summarize_day(
     day: str,
     taxonomy: list[dict],
     lang: str = "zh",
+    fulltexts: dict | None = None,
+    fulltext_chars: int = 4000,
 ) -> DaySummary:
     """调用模型生成当日摘要。失败时返回 ok=False，由调用方降级为纯元数据版。"""
     res = DaySummary(model=client.describe())
@@ -127,7 +156,8 @@ def summarize_day(
         res.ok = True
         return res
     system = SYSTEM_ZH if lang == "zh" else SYSTEM_EN
-    user = build_user_prompt(papers, category, day, taxonomy, lang)
+    user = build_user_prompt(papers, category, day, taxonomy, lang,
+                             fulltexts=fulltexts, fulltext_chars=fulltext_chars)
     schema_hint = '{"highlights": "...", "themes": {"code": "..."}, "papers": [{"id": "...", "summary": "...", "themes": ["code"]}]}'
     # 自适应输出预算：每篇要点约 200 token（中文 80–120 字），外加要点与主题综述
     budget = max(2048, len(papers) * 260 + 1500)
@@ -178,10 +208,14 @@ def summarize_day_bilingual(
     category: str,
     day: str,
     taxonomy: list[dict],
+    fulltexts: dict | None = None,
+    fulltext_chars: int = 4000,
 ) -> DaySummary:
     """中英对照：中英各跑一遍，再按论文合并（仅在用户选择 zh-en 时使用，成本翻倍）。"""
-    zh = summarize_day(client, papers, category=category, day=day, taxonomy=taxonomy, lang="zh")
-    en = summarize_day(client, papers, category=category, day=day, taxonomy=taxonomy, lang="en")
+    zh = summarize_day(client, papers, category=category, day=day, taxonomy=taxonomy, lang="zh",
+                       fulltexts=fulltexts, fulltext_chars=fulltext_chars)
+    en = summarize_day(client, papers, category=category, day=day, taxonomy=taxonomy, lang="en",
+                       fulltexts=fulltexts, fulltext_chars=fulltext_chars)
     if zh.ok and not en.ok:
         return zh
     if en.ok and not zh.ok:

@@ -14,6 +14,7 @@ from .llm.client import LLMClient
 from .mathrender import MathService
 from .models import Paper
 from .pdf import render_pdf
+from .fulltext import FullText, FullTextService
 from .render import (ReportContext, font_css, font_preflight, font_stack,
                      load_theme_taxonomy, render_daily_html)
 from .store import Store
@@ -74,6 +75,36 @@ def build_category_report(
 
     highlights, theme_notes, model = "", {}, ""
     bilingual = cfg.get("report_language", "zh") == "zh-en"
+    # 全文：抓取 arXiv HTML 并提取「结论/讨论」小节，供模型结合摘要一起读
+    fulltexts: dict = {}
+    ft_stats: dict = {}
+    if use_llm and papers:
+        service = FullTextService(store, cfg, progress=say)
+        if service.enabled:
+            try:
+                service.prepare([p.uid for p in papers])
+            except Exception as exc:  # noqa: BLE001
+                log.warning("全文抓取中断（继续用摘要）：%s", exc)
+            for p in papers:
+                row = store.get_fulltext(p.uid)
+                if row is not None:
+                    ft = FullText.from_row(row)
+                    if ft.has_fulltext:
+                        fulltexts[p.uid] = ft
+            ft_stats = dict(service.stats)
+            n_full = len(fulltexts)
+            n_weak = sum(1 for ft in fulltexts.values() if ft.weak_section)
+            extra = []
+            if n_weak:
+                extra.append(f"其中 {n_weak} 篇命中「引言兼小结」")
+            if n_full < len(papers):
+                extra.append(f"{len(papers) - n_full} 篇仅摘要")
+            say(f"  全文就绪：{n_full}/{len(papers)} 篇含结论/讨论节"
+                + (f"（{'；'.join(extra)}）" if extra else ""))
+            # 结论原文只作为模型输入，不直接进 PDF，因此无需预渲染其中的公式
+        else:
+            say("  全文抓取已在配置中关闭，仅用摘要")
+
     if use_llm and papers:
         client = LLMClient(cfg, store)
         if client.ready:
@@ -81,15 +112,18 @@ def build_category_report(
                 f"  调用模型 {client.describe()} 生成摘要（{len(papers)} 篇"
                 + ("，中英对照需两遍）…" if bilingual else "）…")
             )
+            ft_chars = int((cfg.get("fulltext", {}) or {}).get("max_chars", 4000) or 4000)
             if bilingual:
                 from .summarize import summarize_day_bilingual
 
                 summary = summarize_day_bilingual(
-                    client, papers, category=category, day=day, taxonomy=taxonomy
+                    client, papers, category=category, day=day, taxonomy=taxonomy,
+                    fulltexts=fulltexts, fulltext_chars=ft_chars,
                 )
             else:
                 summary = summarize_day(
-                    client, papers, category=category, day=day, taxonomy=taxonomy, lang=lang
+                    client, papers, category=category, day=day, taxonomy=taxonomy, lang=lang,
+                    fulltexts=fulltexts, fulltext_chars=ft_chars,
                 )
             if summary.ok:
                 apply_summary(papers, summary)
@@ -120,6 +154,7 @@ def build_category_report(
             highlights=highlights,
             themes=theme_notes,
             theme_counts=dict(theme_counts),
+            papers=[{"id": p.arxiv_id, "title": p.title} for p in papers],
             model=model,
             count=len(papers),
         )

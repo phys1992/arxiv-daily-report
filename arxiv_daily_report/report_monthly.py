@@ -12,6 +12,7 @@ import datetime as dt
 import html
 import json
 import logging
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,45 +36,57 @@ SYSTEM_ZH = """你是一位相对论与引力领域的科研助理，负责把�
 
 硬性规则：
 1. 只能依据我提供的日报要点，不得引入外部知识，不得编造。
-2. 不写论文编号、不写 arXiv 号、不写作者。提到某项工作时，标注它出现在哪一天的日报上。
-3. 只输出 JSON，不要输出解释文字或 Markdown 代码块。
+2. 提到某项工作时，用（10月13日）标注它出现在哪一天的日报上。
+   其中**重要**的工作再在日期后面补上它的 arXiv 号，写成（10月13日，arXiv:2610.17034）。
+3. arXiv 号只能从我给的「可引用清单」里挑，不得凭记忆写。
+   清单里没有的号一律不要写；宁可不写号，也不能写错号。
+   每段里附号的工作最多 1–3 篇，只挑最重要的，不要每句都挂号。
+4. 只输出 JSON，不要输出解释文字或 Markdown 代码块。
 
 术语与表述：
-4. 术语用领域标准译名（准正规模、潮汐形变率、状态方程、铃宕、旋近、并合、屏蔽、
+5. 术语用领域标准译名（准正规模、潮汐形变率、状态方程、铃宕、旋近、并合、屏蔽、
    反作用、慢滚、极端、近极端、无毛等）。拿不准的保留英文原词。
-5. 数值、量级、正负号、成立条件不得改动，也不得简化到失真。
-6. 逻辑要完整：给结论时给出前提或适用范围；作对比时说明比较对象。
-7. 语法从简：短句为主，一句话只说一件事，不用长定语和嵌套从句，不用比喻和夸张。
+6. 数值、量级、正负号、成立条件不得改动，也不得简化到失真。
+7. 逻辑要完整：给结论时给出前提或适用范围；作对比时说明比较对象。
+8. 语法从简：短句为主，一句话只说一件事，不用长定语和嵌套从句，不用比喻和夸张。
 
 准确性：
-8. 力求准确是第一要求。所有判断都要能在日报里找到依据；不确定就不写。
+9. 力求准确是第一要求。所有判断都要能在日报里找到依据；不确定就不写。
    宁可写得更长一些把事情说清楚，也不要为了短而牺牲准确性或逻辑完整。
 
 表达：
-9. 在准确的前提下力求简明。只写有实质内容的进展，不重复、不铺陈、不写套话。
-   能一句话说清的就不要写两句。同一件事只说一遍。"""
+10. 在准确的前提下力求简明。只写有实质内容的进展，不重复、不铺陈、不写套话。
+   能一句话说清的就不要写两句。同一件事只说一遍。
+
+篇幅：
+11. 简报面向的是"这个月发生了什么"，不是流水账。分主题要点每个主题只写 2–4 项
+    最重要的进展，同类工作合并成一句（例如"多篇工作改进了 X 的约束"），
+    不要逐篇罗列，也不要把日报的句子搬过来。宁可少写几项，也不要铺满篇幅。"""
 
 SYSTEM_EN = """You are a research assistant in relativity and gravitation, condensing a month of
 daily arXiv digests into a short monthly brief.
 
 Hard rules:
 1. Use ONLY the supplied daily-digest notes. Do not add outside knowledge, never invent.
-2. Do not write paper numbers, arXiv IDs or author names. When referring to work, state which
-   day's digest it appeared in.
-3. Output JSON only, no prose outside it and no Markdown fences.
+2. When referring to work, mark which day's digest it appeared in, e.g. (Oct 13).
+   For **important** items add the arXiv ID after the date: (Oct 13, arXiv:2610.17034).
+3. Take arXiv IDs only from the "citable list" I give you, never from memory. If an ID is not in
+   the list, omit it — an omitted ID is fine, a wrong ID is not. At most 1-3 IDs per paragraph,
+   only for the most important work.
+4. Output JSON only, no prose outside it and no Markdown fences.
 
 Terminology and wording:
-4. Use standard technical terms. Keep the original wording if unsure.
-5. Do not alter or over-simplify numbers, magnitudes, signs, or conditions of validity.
-6. Be logically complete: give the premise or scope with any conclusion; name comparison baselines.
-7. Keep the grammar simple: short sentences, one idea each, no nesting, no metaphors or hype.
+5. Use standard technical terms. Keep the original wording if unsure.
+6. Do not alter or over-simplify numbers, magnitudes, signs, or conditions of validity.
+7. Be logically complete: give the premise or scope with any conclusion; name comparison baselines.
+8. Keep the grammar simple: short sentences, one idea each, no nesting, no metaphors or hype.
 
 Accuracy:
-8. Accuracy comes first. Every statement must be traceable to the supplied digests; if unsure,
+9. Accuracy comes first. Every statement must be traceable to the supplied digests; if unsure,
    omit it. Prefer a longer, precise account over a short but vague or incomplete one.
 
 Expression:
-9. Be concise subject to being accurate. Include only substantive progress; no repetition,
+10. Be concise subject to being accurate. Include only substantive progress; no repetition,
    no padding, no filler. If one sentence suffices, do not write two."""
 
 
@@ -89,6 +102,10 @@ class MonthlyData:
     highlights: list[dict] = field(default_factory=list)      # [{text, days:[YYYY-MM-DD]}]
     theme_notes: list[dict] = field(default_factory=list)     # [{code, text, count, days}]
     model: str = ""
+    # 每天可引用的论文：{day: [{"id": "2610.17034", "title": "..."}]}
+    # 模型只能从这里挑 arXiv 号，生成后还会再校验一次，防止编造。
+    paper_index: dict[str, list[dict]] = field(default_factory=dict)
+    dropped_ids: int = 0                                     # 被剔除的无效 arXiv 号个数
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +169,8 @@ def collect_month(cfg: Config, store: Store, month: str) -> MonthlyData:
         # 老版本存档没有主题篇数：从当天该分类的论文标注里直接算出来（不用再调模型）
         if not r.get("theme_counts"):
             r["theme_counts"] = _backfill_theme_counts(store, cfg, labels, tz, r["category"], r["day"])
+        if not r.get("papers"):
+            r["papers"] = _backfill_papers(store, cfg, tz, r["category"], r["day"])
         day = r["day"]
         if day in data.digests:                     # 同一天多个分类：合并要点
             prev = data.digests[day]
@@ -167,6 +186,14 @@ def collect_month(cfg: Config, store: Store, month: str) -> MonthlyData:
                 tc[code] = int(tc.get(code, 0)) + int(n or 0)
         else:
             data.digests[day] = r
+        # 汇总当日可引用的论文（同一天多分类时合并去重）
+        bucket = data.paper_index.setdefault(day, [])
+        seen = {x.get("id") for x in bucket}
+        for it in (r.get("papers") or []):
+            pid = bare_id((it or {}).get("id"))
+            if pid and pid not in seen:
+                bucket.append({"id": pid, "title": str(it.get("title") or "").strip()})
+                seen.add(pid)
     data.days = sorted(data.digests)
 
     # 简报里报"日报实际覆盖的论文数"，而不是库内该月全部论文
@@ -202,6 +229,58 @@ def _backfill_theme_counts(store: Store, cfg: Config, labels: dict, tz: str,
     except Exception:  # noqa: BLE001
         pass
     return dict(out)
+
+
+def _backfill_papers(store: Store, cfg: Config, tz: str, category: str, day: str) -> list[dict]:
+    """老存档没有论文清单时，按该日该分类的论文重建，供月报附 arXiv 号。"""
+    out: list[dict] = []
+    try:
+        for p in store.papers_for(category, tz, day, policy=cfg.get("crosslist_policy", "primary")):
+            out.append({"id": p.arxiv_id, "title": p.title})
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def day_paper_lines(store: Store, cfg: Config, data: MonthlyData, lang: str,
+                    limit: int = 14000) -> str:
+    """按日期列出「arXiv 号 + 一句话要点」，供写主要进展时挂号。
+
+    为什么需要它：时间线与主题材料都是日报改写过的**散文**，里面没有标题也没有号；
+    模型无法把"某篇工作"对应到可引用清单里的英文标题，于是干脆不挂号（实测为 0）。
+    这里直接给出「号 ↔ 要点」的对照，模型照抄即可。
+    """
+    tz = cfg["schedule"].get("timezone", "Asia/Shanghai")
+    policy = cfg.get("crosslist_policy", "primary")
+    cats = [x["category"] for x in cfg.get("subscriptions", []) if x.get("category")]
+    out: list[str] = []
+    used = 0
+    for day in data.days:
+        if used >= limit:
+            break
+        seen: set[str] = set()
+        lines: list[str] = []
+        for cat in (cats or [None]):
+            try:
+                papers = store.papers_for(cat, tz, day, policy=policy) if cat else []
+            except Exception:  # noqa: BLE001
+                continue
+            for p in papers:
+                aid = bare_id(p.arxiv_id)
+                if aid in seen:
+                    continue
+                seen.add(aid)
+                note = " ".join((p.summary or "").split())
+                if not note:
+                    continue
+                if len(note) > 150:
+                    note = note[:150] + "…"
+                lines.append(f"  {aid}  {note}")
+        if lines:
+            block = f"{day_label(day, lang)}：\n" + "\n".join(lines)
+            used += len(block)
+            out.append(block)
+    return "\n".join(out)
 
 
 def digest_timeline(data: MonthlyData, labels: dict, order: list[str], lang: str) -> tuple[str, str]:
@@ -261,14 +340,133 @@ def _valid_days(raw, month: str) -> list[str]:
     return sorted(out)
 
 
+_CITE_GROUP = re.compile(r"[（(]([^）)]*)[）)]")
+_VERSION = re.compile(r"v\d+$")
+
+
+def bare_id(value: str) -> str:
+    """去掉版本号：2610.17034v1 -> 2610.17034。
+
+    论文的唯一标识带版本号（uid），但正文里引用时按惯例只写裸号，
+    两边必须归一化后再比较，否则一个都匹配不上。
+    """
+    return _VERSION.sub("", str(value or "").strip())
+_DAY_IN_TEXT = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_ARXIV_IN_TEXT = re.compile(r"arXiv:\s*([0-9]{4}\.[0-9]{4,5})", re.I)
+
+
+def _citation_days(blob: str, month: str) -> list[str]:
+    out: list[str] = []
+    for m, d in _DAY_IN_TEXT.findall(blob):
+        try:
+            day = dt.date(int(month[:4]), int(m), int(d))
+        except ValueError:
+            continue
+        s = day.isoformat()
+        if s.startswith(month) and s not in out:
+            out.append(s)
+    return out
+
+
+def sanitize_citations(text: str, month: str, index: dict[str, list[dict]]) -> tuple[str, int]:
+    """校验正文里的 arXiv 号，只保留确实出现在所标日期日报里的那些。
+
+    模型被要求"只能从给定清单里挑号"，但仍可能编造或张冠李戴；这里做最后一道闸：
+      * 括号里必须同时有日期与 arXiv 号（号必须挂在某一天上）；
+      * arXiv 号必须出现在该括号标注的某一天的论文清单里；
+      * 任何不满足的号一律删掉，只留下日期。
+    返回（清洗后的文本, 被剔除的个数）。
+    """
+    if not text:
+        return text, 0
+    dropped = 0
+
+    def fix(m: re.Match) -> str:
+        nonlocal dropped
+        inner = m.group(1)
+        ids = _ARXIV_IN_TEXT.findall(inner)
+        if not ids:
+            return m.group(0)
+        days = _citation_days(inner, month)
+        allowed: set[str] = set()
+        for d in days:
+            for it in index.get(d, []):
+                allowed.add(bare_id(it.get("id")))
+        keep = [i for i in ids if bare_id(i) in allowed]
+        dropped += len(ids) - len(keep)
+        # 抹掉所有 arXiv 号，再把合法的按原顺序放回去
+        cleaned = _ARXIV_IN_TEXT.sub("", inner)
+        cleaned = re.sub(r"[，,、;；]\s*(?=[，,、;；]|$)", "", cleaned)
+        cleaned = re.sub(r"[，,、;；]\s*$", "", cleaned).strip()
+        if keep:
+            cleaned = (cleaned + "，" if cleaned else "") + "，".join(f"arXiv:{i}" for i in keep)
+        return "（" + cleaned + "）" if cleaned else ""
+
+    out = _CITE_GROUP.sub(fix, text)
+    return re.sub(r"\s{2,}", " ", out).strip(), dropped
+
+
+def pick_highlight_ids(raw_ids, days: list[str], index: dict[str, list[dict]]) -> tuple[list[str], int]:
+    """校验主要进展的 arxiv 字段：只保留确实出现在所标日期清单里的号。
+
+    返回（保留的号, 剔除的个数）。日期是独立字段，所以这里按 days 而不是按正文括号判断。
+    """
+    allowed: set[str] = set()
+    for d in days:
+        for it in index.get(d, []):
+            allowed.add(bare_id(it.get("id")))
+    picked: list[str] = []
+    dropped = 0
+    for raw in (raw_ids or []):
+        aid = bare_id(re.sub(r"^arXiv:\s*", "", str(raw), flags=re.I))
+        if not aid:
+            continue
+        if aid in allowed and aid not in picked:
+            picked.append(aid)
+        else:
+            dropped += 1
+    return picked, dropped
+
+
+def _allowed_ids_text(index: dict[str, list[dict]], month: str, lang: str,
+                      days: list[str] | None = None) -> str:
+    """给模型的可引用清单：按日期列出「arXiv 号 + 标题」。
+
+    **必须带标题**：只给号的话，模型无法判断哪个号对应哪项工作，
+    结果就是一个号都不敢挂（实测只能挂出 1 个）。带上标题它才能对上号。
+    """
+    lines = []
+    for day in sorted(days if days is not None else index):
+        items = index.get(day) or []
+        if not items:
+            continue
+        lines.append(f"{day_label(day, lang)}：")
+        for x in items:
+            title = " ".join(str(x.get("title") or "").split())
+            if len(title) > 110:
+                title = title[:110] + "…"
+            lines.append(f"  {bare_id(x.get('id'))}  {title}")
+    return "\n".join(lines)
+
+
 def monthly_llm(
     client: LLMClient, data: MonthlyData, *, lang: str, labels: dict, order: list[str],
-    progress: Progress,
+    progress: Progress, store: Store | None = None, cfg: Config | None = None,
 ) -> None:
     """两步：先分主题要点（map，必要时分块合并），再总览与主要进展（reduce）。"""
     timeline, theme_material = digest_timeline(data, labels, order, lang)
+    id_list = _allowed_ids_text(data.paper_index, data.month, lang) or "（本月无可引用的 arXiv 号）"
+
+    def ids_for(text) -> str:
+        """只给这一批材料里出现的日期对应的论文清单，避免把整月都塞进去。"""
+        if not isinstance(text, str):
+            text = "\n".join(str(x) for x in text)
+        days = _citation_days(text, data.month)
+        return _allowed_ids_text(data.paper_index, data.month, lang, days=days) \
+            or "（这批材料涉及日期暂无可引用的 arXiv 号）"
     schema_themes = '{"themes":[{"code":"...","text":"...","days":["10-07"],"count":0}]}'
-    schema_final = '{"overview":"...","highlights":[{"text":"...","days":["10-13"]}]}'
+    schema_final = ('{"overview":"...",'
+                    '"highlights":[{"text":"...","days":["10-13"],"arxiv":["2610.17034"]}]}')
 
     # ---- map：分主题要点 ----
     raw_items: list[str] = []
@@ -277,17 +475,22 @@ def monthly_llm(
         for i, blk in enumerate(blocks, 1):
             tag = f"（第 {i}/{len(blocks)} 批）" if len(blocks) > 1 else ""
             progress(f"  月报 map：整理分主题要点{tag}")
+            block_text = "\n".join(str(x) for x in blk) if not isinstance(blk, str) else blk
             ask = (
-                '请输出 JSON：{"themes":[{"code":"主题代码","text":"1–3 句要点，句末用（10月7日）'
-                '标注它出现在哪天的日报上；不要写论文编号","days":["10-07"],"count":0}]}，'
-                'code 必须用我给的代码。'
+                '请输出 JSON：{"themes":[{"code":"主题代码","text":"该主题要点，句末用（10月7日）'
+                '标注它出现在哪天的日报上。其中最重要的 1–3 项工作必须补上 arXiv 号，写成'
+                '（10月7日，arXiv:2610.12345）；号与标题的对应关系以上面的可引用清单为准，'
+                '清单里没有的号不要写。每个主题只写最重要的进展，不要罗列，不要复述日报。",'
+                '"days":["10-07"],"count":0}]}，code 必须用我给的代码。'
                 if lang == "zh"
-                else 'Return JSON: {"themes":[{"code":"...","text":"1-3 sentences, cite the day '
-                     'in parentheses","days":["10-07"],"count":0}]}, reusing my codes.'
+                else 'Return JSON: {"themes":[{"code":"...","text":"... cite the day as (Oct 7), '
+                     'adding an arXiv ID for important work; IDs must come from the citable list",'
+                     '"days":["10-07"],"count":0}]}, reusing my codes.'
             )
             user = (
                 f"月份：{data.month}\n\n以下是本月各主题的**日报**要点（按主题聚合）：\n\n"
-                f"{blk}\n\n{ask}"
+                f"{block_text}\n\n"
+                f"可引用清单（号 + 标题；重要工作只能从这里挑号）：\n{ids_for(block_text)}\n\n{ask}"
             )
             try:
                 obj = client.chat_json(SYSTEM_ZH if lang == "zh" else SYSTEM_EN, user,
@@ -302,7 +505,8 @@ def monthly_llm(
             progress("  月报 merge：合并分主题要点")
             user = (
                 f"月份：{data.month}\n\n以下是分批整理的主题要点（每行一个 JSON），请合并去重，"
-                f"同一 code 只保留一条，篇幅仍要短：\n\n" + "\n".join(raw_items) + f"\n\n请输出 JSON：{schema_themes}"
+                f"同一 code 只保留一条，保留其中的日期与 arXiv 号，篇幅仍要短：\n\n"
+                + "\n".join(raw_items) + f"\n\n请输出 JSON：{schema_themes}"
             )
             try:
                 obj = client.chat_json(SYSTEM_ZH if lang == "zh" else SYSTEM_EN, user,
@@ -333,8 +537,16 @@ def monthly_llm(
                                order.index(x["code"]) if x["code"] in order else 999))
     # 保留所有确有论文的主题（不设条数上限）
     data.theme_notes = [t for t in themes if t["text"] and (t["count"] or 0) > 0]
+    # 最后一道闸：剔除编造或张冠李戴的 arXiv 号，只保留日期
+    dropped = 0
+    for t in data.theme_notes:
+        t["text"], n = sanitize_citations(t["text"], data.month, data.paper_index)
+        dropped += n
+    data.dropped_ids += dropped
 
     # ---- reduce：总览 + 主要进展 ----
+    if data.dropped_ids:
+        progress(f"  校验剔除 {data.dropped_ids} 个无法归属到所标日期的 arXiv 号")
     progress("  月报 reduce：生成总览与主要进展")
     stats = (
         f"本月有日报 {len(data.days)} 天；新论文 {data.paper_count} 篇；"
@@ -347,28 +559,49 @@ def monthly_llm(
     ask = (
         '请输出 JSON：{"overview":"本月概览，写成一段连贯文字，像论文摘要那样先总述本月主线，'
         '再点出最突出的方向以及它们之间的关系。力求准确，不要为了短而省略关键条件或因果关系；'
-        '也不要罗列篇数、不要逐条复述日报。提到具体工作时在句末用（10月13日）标注它出现在哪天的日报上。",'
-        '"highlights":[{"text":"一条主要进展，1–2 句，简洁准确","days":["10-13"]}]}，'
-        'highlights 给 4–6 条。'
+        '也不要罗列篇数、不要逐条复述日报。提到具体工作时在句末用（10月13日）标注它出现在哪天的日报上，'
+        '重要工作再补上 arXiv 号，写成（10月13日，arXiv:2610.17034），号必须来自可引用清单。",'
+        '"highlights":[{"text":"一条主要进展，1–2 句，简洁准确",'
+        '"days":["10-13"],"arxiv":["2610.17034"]}]}，highlights 给 4–6 条。'
+        '日期只填 days 字段、不要写进 text；'
+        '每条 highlights 都必须在 arxiv 字段里给出它对应的 arXiv 号（1–2 个，'
+        '依据"当日论文对照表"按内容匹配），这是重要文献的主要落点。'
+        '只有确实匹配不上时才留空数组。'
         if lang == "zh"
         else 'Return JSON: {"overview":"A coherent paragraph overview, like an abstract; be accurate '
-             'rather than terse; cite days in parentheses",'
-             '"highlights":[{"text":"...","days":["10-13"]}]} with 4-6 highlights.'
+             'rather than terse; cite days in parentheses, adding an arXiv ID from the citable list '
+             'for important work",'
+             '"highlights":[{"text":"...","days":["10-13"],"arxiv":["2610.17034"]}]} '
+             'with 4-6 highlights. Put the date only in the days field, not in text; '
+             'every highlight must carry its arXiv IDs in the arxiv field, matched by content '
+             'against the per-day paper table. Use an empty array only if nothing matches.'
     )
+    paper_lines = day_paper_lines(store, cfg, data, lang) if (store and cfg) else ""
     user = (
         f"月份：{data.month}\n统计：{stats}\n\n"
         f"本月各天日报的要点时间线：\n{timeline}\n\n"
-        f"各主题要点：\n{themes_brief}\n\n{ask}"
+        f"各主题要点：\n{themes_brief}\n\n"
+        f"可引用清单（号 + 标题；重要工作只能从这里挑号）：\n{id_list}\n\n"
+        + (f"当日论文对照表（号 + 一句话要点，写 highlights 时据此挂号）：\n{paper_lines}\n\n"
+           if paper_lines else "")
+        + ask
     )
     try:
         obj = client.chat_json(SYSTEM_ZH if lang == "zh" else SYSTEM_EN, user,
                                schema_hint=schema_final, max_tokens=2600)
         data.overview = str(obj.get("overview") or "").strip()
-        data.highlights = [
-            {"text": str(h.get("text") or "").strip(), "days": _valid_days(h.get("days"), data.month)}
-            for h in (obj.get("highlights") or [])
-            if isinstance(h, dict) and str(h.get("text") or "").strip()
-        ]
+        data.highlights = []
+        for h in (obj.get("highlights") or []):
+            if not (isinstance(h, dict) and str(h.get("text") or "").strip()):
+                continue
+            days = _valid_days(h.get("days"), data.month)
+            picked, ndrop = pick_highlight_ids(h.get("arxiv"), days, data.paper_index)
+            data.dropped_ids += ndrop
+            text, n = sanitize_citations(str(h["text"]).strip(), data.month, data.paper_index)
+            data.dropped_ids += n
+            data.highlights.append({"text": text, "days": days, "arxiv": picked})
+        data.overview, n = sanitize_citations(data.overview, data.month, data.paper_index)
+        data.dropped_ids += n
     except LLMError as exc:
         progress(f"  总览生成失败：{exc}")
 
@@ -380,6 +613,17 @@ def _last_day(month: str) -> int:
     y, m = (int(x) for x in month.split("-"))
     nxt = dt.date(y + (m // 12), (m % 12) + 1, 1)
     return (nxt - dt.timedelta(days=1)).day
+
+
+def linkify_arxiv(text: str) -> str:
+    """转义后把正文里的 arXiv 号变成可点击链接。"""
+    safe = html.escape(text or "")
+    return re.sub(
+        r"arXiv:\s*([0-9]{4}\.[0-9]{4,5})",
+        lambda m: (f'<a class="arx" href="https://arxiv.org/abs/{m.group(1)}">'
+                   f'arXiv:{m.group(1)}</a>'),
+        safe,
+    )
 
 
 def render_monthly_html(cfg: Config, data: MonthlyData, *, scope_name: str) -> str:
@@ -425,6 +669,7 @@ ol.moves li { margin-bottom:1.8mm; }
 .theme .meta { color:#7a8698; font-size:9pt; font-weight:400; }
 .theme p { margin:1mm 0 0; }
 .daytag { color:#55606f; font-size:9.5pt; }
+a.arx { color:#2f6fb5; text-decoration:none; font-size:9.5pt; }
 </style></head><body>""")
     parts.append(f"<h1>{html.escape(title)}</h1>")
     parts.append(f"<div class='sub'>{html.escape(subtitle)}</div>")
@@ -438,16 +683,26 @@ ol.moves li { margin-bottom:1.8mm; }
         parts.append("<div class='abstract'>")
         for para in data.overview.splitlines():
             if para.strip():
-                parts.append(f"<p>{html.escape(para.strip())}</p>")
+                parts.append(f"<p>{linkify_arxiv(para.strip())}</p>")
         parts.append("</div>")
 
     if data.highlights:
         parts.append(h2("主要进展", "Highlights"))
         parts.append("<ol class='moves'>")
         for h in data.highlights:
-            tag = _fmt_days(h.get("days") or [], lang)
-            suffix = f" <span class='daytag'>{html.escape(tag)}</span>" if tag else ""
-            parts.append(f"<li>{html.escape(h['text'])}{suffix}</li>")
+            # _fmt_days 已带括号，这里要去掉外层括号再拼号，避免出现（（…））
+            tag = _fmt_days(h.get("days") or [], lang).strip("()（）")
+            ids = h.get("arxiv") or []
+            if ids:
+                links = "，".join(
+                    f'<a class="arx" href="https://arxiv.org/abs/{html.escape(a)}">arXiv:{html.escape(a)}</a>'
+                    for a in ids
+                )
+                tag = (f"（{tag}，{links}）" if tag else f"（{links}）")
+            elif tag:
+                tag = f"（{tag}）"
+            suffix = f" <span class='daytag'>{tag}</span>" if tag else ""
+            parts.append(f"<li>{linkify_arxiv(h['text'])}{suffix}</li>")
         parts.append("</ol>")
 
     if data.theme_notes:
@@ -461,12 +716,14 @@ ol.moves li { margin-bottom:1.8mm; }
                              else f" <span class='meta'>{t['count']} papers</span>")
             parts.append(
                 f"<div class='theme'><span class='name'>{html.escape(label)}</span>{meta_html}"
-                f"<p>{html.escape(t['text'])}</p></div>"
+                f"<p>{linkify_arxiv(t['text'])}</p></div>"
             )
 
-    foot = ("内容取自当月每日日报，不另列文献；括号内标注该内容出现的日报日期。"
+    foot = ("内容取自当月每日日报，不另列文献；括号内标注该内容出现的日报日期，"
+            "重要工作附 arXiv 号（可点击，已逐条核对确属该日）。"
             if lang == "zh" else
-            "Condensed from the daily digests; dates in parentheses mark the digest it appeared in.")
+            "Condensed from the daily digests; parentheses give the digest date, and important "
+            "work carries a clickable arXiv ID.")
     if data.model:
         foot += ("　摘编模型：" if lang == "zh" else "  Model: ") + data.model
     parts.append(f"<div class='footer'>{html.escape(foot)}</div>")
@@ -513,13 +770,16 @@ def run_monthly(
             say(f"  调用模型 {client.describe()} 浓缩月度简报"
                 + ("（中英对照需两遍）" if lang == "zh-en" else ""))
             if lang == "zh-en":
-                monthly_llm(client, data, lang="zh", labels=labels, order=order, progress=say)
+                monthly_llm(client, data, lang="zh", labels=labels, order=order, progress=say,
+                            store=store, cfg=cfg)
                 en_data = collect_month(cfg, store, month)
-                monthly_llm(client, en_data, lang="en", labels=labels, order=order, progress=say)
+                monthly_llm(client, en_data, lang="en", labels=labels, order=order, progress=say,
+                            store=store, cfg=cfg)
                 data.overview = _join(data.overview, en_data.overview)
                 data.model = f"{client.describe()}（中英对照）"
             else:
-                monthly_llm(client, data, lang=lang, labels=labels, order=order, progress=say)
+                monthly_llm(client, data, lang=lang, labels=labels, order=order, progress=say,
+                            store=store, cfg=cfg)
                 data.model = client.describe()
         else:
             say("  未配置模型密钥，只出统计版简报")

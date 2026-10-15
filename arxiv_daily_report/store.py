@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS day_digest (
     highlights TEXT NOT NULL DEFAULT '',
     themes     TEXT NOT NULL DEFAULT '{}',
     theme_counts TEXT NOT NULL DEFAULT '{}',
+    -- 当日论文清单（JSON: [{"id":..., "title":...}]）。月报据此为重要文献附 arXiv 号。
+    papers     TEXT NOT NULL DEFAULT '[]',
     model      TEXT NOT NULL DEFAULT '',
     count      INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -76,6 +78,16 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- 全文抓取结果缓存：同一篇论文只抓一次 arXiv HTML
+CREATE TABLE IF NOT EXISTS fulltext (
+    arxiv_id   TEXT PRIMARY KEY,
+    source     TEXT NOT NULL DEFAULT '',
+    abstract   TEXT NOT NULL DEFAULT '',
+    payload    TEXT NOT NULL DEFAULT '{}',
+    error      TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS math_cache (
@@ -120,6 +132,10 @@ class Store:
             if "theme_counts" not in cols:
                 self.conn.execute(
                     "ALTER TABLE day_digest ADD COLUMN theme_counts TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "papers" not in cols:
+                self.conn.execute(
+                    "ALTER TABLE day_digest ADD COLUMN papers TEXT NOT NULL DEFAULT '[]'"
                 )
         except Exception:  # noqa: BLE001
             pass
@@ -255,17 +271,19 @@ class Store:
     # -- 日报摘要存档（月报的输入）------------------------------------------
     def save_day_digest(self, day: str, category: str, *, highlights: str = "",
                         themes: dict | None = None, theme_counts: dict | None = None,
+                        papers: list[dict] | None = None,
                         model: str = "", count: int = 0) -> None:
         with self._lock:
             self.conn.execute(
-                "INSERT INTO day_digest(day,category,highlights,themes,theme_counts,model,count,"
-                "created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(day,category) DO UPDATE SET "
+                "INSERT INTO day_digest(day,category,highlights,themes,theme_counts,papers,model,"
+                "count,created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(day,category) DO UPDATE SET "
                 "highlights=excluded.highlights, themes=excluded.themes, "
-                "theme_counts=excluded.theme_counts, model=excluded.model, "
+                "theme_counts=excluded.theme_counts, papers=excluded.papers, model=excluded.model, "
                 "count=excluded.count, created_at=excluded.created_at",
                 (day, category, highlights or "",
                  json.dumps(themes or {}, ensure_ascii=False),
                  json.dumps(theme_counts or {}, ensure_ascii=False),
+                 json.dumps(papers or [], ensure_ascii=False),
                  model, count, _now()),
             )
             self.conn.commit()
@@ -277,11 +295,13 @@ class Store:
         if not row:
             return None
         out = dict(row)
-        for key in ("themes", "theme_counts"):
+        for key in ("themes", "theme_counts", "papers"):
             try:
                 out[key] = json.loads(out.get(key) or "{}")
             except Exception:
-                out[key] = {}
+                out[key] = {} if key != "papers" else []
+        if not isinstance(out.get("papers"), list):
+            out["papers"] = []
         return out
 
     def month_digests(self, start_day: str, end_day: str, categories: list[str] | None = None) -> list[dict[str, Any]]:
@@ -296,13 +316,40 @@ class Store:
         out = []
         for r in rows:
             d = dict(r)
-            for key in ("themes", "theme_counts"):
+            for key in ("themes", "theme_counts", "papers"):
                 try:
                     d[key] = json.loads(d.get(key) or "{}")
                 except Exception:
-                    d[key] = {}
+                    d[key] = {} if key != "papers" else []
+            if not isinstance(d.get("papers"), list):
+                d["papers"] = []
             out.append(d)
         return out
+
+    # -- 全文缓存 ----------------------------------------------------------
+    def get_fulltext(self, arxiv_id: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM fulltext WHERE arxiv_id=?", (arxiv_id,)
+        ).fetchone()
+
+    def save_fulltext(self, arxiv_id: str, *, source: str = "", abstract: str = "",
+                      payload: str = "{}", error: str = "") -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO fulltext(arxiv_id,source,abstract,payload,error,fetched_at) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(arxiv_id) DO UPDATE SET "
+                "source=excluded.source, abstract=excluded.abstract, payload=excluded.payload, "
+                "error=excluded.error, fetched_at=excluded.fetched_at",
+                (arxiv_id, source or "", abstract or "", payload or "{}", error or "", _now()),
+            )
+            self.conn.commit()
+
+    def fulltext_stats(self) -> dict[str, int]:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN error='' THEN 1 ELSE 0 END) AS ok FROM fulltext"
+        ).fetchone()
+        return {"total": row["total"] or 0, "with_fulltext": row["ok"] or 0}
 
     # -- 报告索引 ----------------------------------------------------------
     def record_report(self, day: str, category: str, path: str, count: int, kind: str = "daily") -> int:
