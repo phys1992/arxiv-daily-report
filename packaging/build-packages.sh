@@ -50,26 +50,18 @@ recs = [] if fmt == "archlinux" else ["python3-pip"]
 tpl = (root / "packaging/nfpm.yaml.tmpl").read_text(encoding="utf-8")
 tpl = tpl.replace("@DEPENDS@", "\n".join("  - " + d for d in deps))
 tpl = tpl.replace("@RECOMMENDS@", "\n".join("  - " + r for r in recs) if recs else "  []")
-out = root / "dist" / f"nfpm-{fmt}.yaml"
+out = root / "dist" / ".nfpm" / f"nfpm-{fmt}.yaml"
+out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(tpl, encoding="utf-8")
 PYEOF
-  VERSION="$VERSION" "$NFP" package -f "dist/nfpm-$fmt.yaml" -p "$fmt" -t dist/ 2>&1 | sed 's/^/      /'
+  VERSION="$VERSION" "$NFP" package -f "dist/.nfpm/nfpm-$fmt.yaml" -p "$fmt" -t dist/ 2>&1 | sed 's/^/      /'
 done
 
 # ---------------------------------------------------------------- 安装包自检
-# 运行期产物（数据库、原始 XML、报告）绝不能进安装包
-echo "==> 自检：安装包里不应含运行期数据"
-fail=0
-for pkg in dist/*.deb dist/*.rpm dist/*.pkg.tar.zst; do
-  [[ -e "$pkg" ]] || continue
-  if bsdtar tf "$pkg" 2>/dev/null | grep -qE 'state\.sqlite3|/data/raw/|/reports/'; then
-    echo "    ✗ $(basename "$pkg") 含运行期数据" >&2
-    fail=1
-  else
-    echo "    ✓ $(basename "$pkg")"
-  fi
-done
-[[ $fail -eq 0 ]] || { echo "打包中止：安装包被运行期数据污染" >&2; exit 1; }
+# 注意：不能用 `bsdtar tf x.deb`——它只列出 deb 的 3 个 ar 成员，
+# 不会递归进内层 data.tar，对 deb 等于没检查。用专门写的校验脚本。
+echo "==> 校验安装包内容"
+python3 packaging/verify-packages.py "dist/*.deb" "dist/*.rpm" "dist/*.pkg.tar.zst"
 
 echo
 echo "==> 产物"

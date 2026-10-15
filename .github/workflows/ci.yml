@@ -49,29 +49,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build all three package formats
         run: ./packaging/build-packages.sh
-      - name: Verify package layout
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import glob, subprocess, sys
-          want = [
-              "usr/bin/arxiv-daily-report",
-              "usr/lib/systemd/user/arxiv-daily-report.service",
-              "usr/share/arxiv-daily-report/data/arxiv_categories.json",
-              "usr/share/arxiv-daily-report/web/index.html",
-          ]
-          bad = []
-          for pkg in sorted(glob.glob("dist/*")):
-              if not pkg.endswith((".deb", ".rpm", ".pkg.tar.zst")):
-                  continue
-              out = subprocess.run(["bsdtar", "tf", pkg], capture_output=True, text=True).stdout
-              for w in want:
-                  if w not in out:
-                      bad.append(f"{pkg}: 缺少 {w}")
-              for forbidden in ("state.sqlite3", "/data/raw/", "/reports/"):
-                  if forbidden in out:
-                      bad.append(f"{pkg}: 含运行期数据 {forbidden}")
-          if bad:
-              print("\n".join(bad)); sys.exit(1)
-          print("三种安装包的布局与洁净度检查通过")
-          PY
+      - name: Verify package layout and cleanliness
+        # 对 .deb 不能用 bsdtar（只列出 ar 成员，不进内层 tarball），
+        # packaging/verify-packages.py 会按格式分别正确读取
+        run: python3 packaging/verify-packages.py "dist/*.deb" "dist/*.rpm" "dist/*.pkg.tar.zst"

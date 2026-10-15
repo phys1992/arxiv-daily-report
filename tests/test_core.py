@@ -609,6 +609,123 @@ class BilingualTest(unittest.TestCase):
             tmp.cleanup()
 
 
+class PackageVerifierTest(HermeticTestCase):
+    """安装包校验器：必须能真正读到内层文件（deb 用 bsdtar 只能看到 ar 成员）。"""
+
+    @staticmethod
+    def _make_deb(path: Path, members: dict[str, str]) -> None:
+        """手工造一个最小合法 deb：ar(debian-binary, data.tar.gz)。"""
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for name, content in members.items():
+                data = content.encode()
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+        payload = buf.getvalue()
+
+        def ar_member(name: str, data: bytes) -> bytes:
+            header = (name + "/").ljust(16) + "0".ljust(12) + "0".ljust(6) + \
+                     "0".ljust(6) + "100644".ljust(8) + str(len(data)).ljust(10) + "`\n"
+            return header.encode() + data + (b"\n" if len(data) % 2 else b"")
+
+        blob = b"!<arch>\n"
+        blob += ar_member("debian-binary", b"2.0\n")
+        blob += ar_member("data.tar.gz", payload)
+        path.write_bytes(blob)
+
+    def _verify(self, *pkgs: Path) -> tuple[int, str]:
+        import contextlib
+        import io
+        import sys
+
+        sys.path.insert(0, str(PROJECT / "packaging"))
+        try:
+            import importlib
+            mod = importlib.import_module("verify-packages") if False else None
+            import importlib.util as _u
+            spec = _u.spec_from_file_location("adr_verify", PROJECT / "packaging/verify-packages.py")
+            mod = _u.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = mod.main(["verify-packages.py", *[str(p) for p in pkgs]])
+        return code, out.getvalue()
+
+    def test_deb_contents_are_read_through_ar_layer(self):
+        """关键回归：deb 的内容要能穿透 ar 读到内层 data.tar，否则校验是假阴性。"""
+        with tempfile.TemporaryDirectory() as td:
+            deb = Path(td) / "pkg_1.0_amd64.deb"
+            self._make_deb(deb, {
+                "./usr/bin/arxiv-daily-report": "#!/usr/bin/python3\n",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/cli.py": "x=1\n",
+                "./usr/lib/systemd/user/arxiv-daily-report.service": "[Unit]\n",
+                "./usr/share/arxiv-daily-report/data/arxiv_categories.json": "{}\n",
+                "./usr/share/arxiv-daily-report/data/theme_taxonomy.json": "{}\n",
+                "./usr/share/arxiv-daily-report/web/index.html": "<html>\n",
+                "./usr/share/doc/arxiv-daily-report/README.md": "x\n",
+                "./usr/share/licenses/arxiv-daily-report/LICENSE": "x\n",
+                # 真实安装包有上百个文件；校验器会用条目数判断是否真的读进了内层
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/__init__.py": "x\n",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/config.py": "x\n",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/render.py": "x\n",
+                "./usr/share/arxiv-daily-report/web/app.js": "x\n",
+                "./usr/share/arxiv-daily-report/assets/mathjax/render.js": "x\n",
+            })
+            code, out = self._verify(deb)
+            self.assertEqual(code, 0, out)
+            self.assertIn("通过校验", out)
+
+    def test_verifier_rejects_runtime_data(self):
+        """混入运行期数据必须被拦下——这是发布前的最后一道闸。"""
+        with tempfile.TemporaryDirectory() as td:
+            deb = Path(td) / "pkg_1.0_amd64.deb"
+            self._make_deb(deb, {
+                "./usr/bin/arxiv-daily-report": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/cli.py": "x",
+                "./usr/lib/systemd/user/arxiv-daily-report.service": "x",
+                "./usr/share/arxiv-daily-report/data/arxiv_categories.json": "x",
+                "./usr/share/arxiv-daily-report/data/theme_taxonomy.json": "x",
+                "./usr/share/arxiv-daily-report/web/index.html": "x",
+                "./usr/share/doc/arxiv-daily-report/README.md": "x",
+                "./usr/share/licenses/arxiv-daily-report/LICENSE": "x",
+                "./usr/share/arxiv-daily-report/data/state.sqlite3": "dirty",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/__init__.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/config.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/render.py": "x",
+                "./usr/share/arxiv-daily-report/web/app.js": "x",
+                "./usr/share/arxiv-daily-report/assets/mathjax/render.js": "x",
+            })
+            code, out = self._verify(deb)
+            self.assertEqual(code, 1)
+            self.assertIn("state.sqlite3", out)
+
+    def test_verifier_rejects_missing_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            deb = Path(td) / "pkg_1.0_amd64.deb"
+            self._make_deb(deb, {
+                "./usr/bin/arxiv-daily-report": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/cli.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/__init__.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/config.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/render.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/store.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/pdf.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/models.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/cli.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/collect.py": "x",
+                "./usr/lib/arxiv-daily-report/arxiv_daily_report/status.py": "x",
+            })
+            code, out = self._verify(deb)
+            self.assertEqual(code, 1)
+            self.assertIn("缺少", out)
+
+
 class MonthlyTest(HermeticTestCase):
     """月报：目标月份、日期引用、依据日报浓缩。"""
 
