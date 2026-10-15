@@ -120,9 +120,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     # ---- 报告内容 ----
     "report": {
-        "font_profile": "source-han",  # source-han | system | custom
-        "font_file_regular": "",
-        "font_file_bold": "",
+        # 字体由系统提供（不再随仓库分发）。
+        # font_family 留空则用内置默认栈：西文字体在前、中文字体在后；
+        # 逐字符回退 => 英文走西文字体、汉字走中文字体（优先思源黑体）。
+        "font_family": "",
+        "font_file": "",               # 可选：额外的字体文件，会内联并置于栈首
         "math_backend": "auto",        # auto | mathjax | unicode
         "include_daily_highlights": True,
         "include_abstract_note": True,
@@ -290,9 +292,9 @@ class Config:
 
     @property
     def assets_dir(self) -> Path:
-        """随仓库分发的静态资产（字体、MathJax）永远在项目内，不随 GRQC_HOME 移动。
+        """随仓库分发的静态资产（MathJax 等）永远在项目内，不随 GRQC_HOME 移动。
 
-        允许用 GRQC_ASSETS 覆盖，方便把字体放到别处（例如容器里挂载）。
+        允许用 GRQC_ASSETS 覆盖，方便把它放到别处（例如容器里挂载）。
         """
         env = os.environ.get("GRQC_ASSETS", "").strip()
         if env:

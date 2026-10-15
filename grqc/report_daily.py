@@ -14,7 +14,8 @@ from .llm.client import LLMClient
 from .mathrender import MathService
 from .models import Paper
 from .pdf import render_pdf
-from .render import ReportContext, load_theme_taxonomy, render_daily_html, resolve_fonts
+from .render import (ReportContext, font_css, font_preflight, font_stack,
+                     load_theme_taxonomy, render_daily_html)
 from .store import Store
 from .summarize import apply_summary, summarize_day
 
@@ -102,18 +103,9 @@ def build_category_report(
 
     math.prepare([p.title for p in papers] + [p.summary for p in papers])
 
-    # 豆腐块自检：报告里出现的字符是否都被随仓库分发的字体覆盖
-    from .render import coverage_check
-
-    missing = coverage_check(
-        cfg.assets_dir,
-        [p.title for p in papers] + [p.author_text() for p in papers] + [p.summary for p in papers],
-    )
-    if missing:
-        say(
-            "  警告：以下字符不在随仓库分发的字体中，将回退到系统字体（若系统也没有会显示为方块）："
-            + " ".join(f"{c}(U+{ord(c):04X})" for c in missing[:20])
-        )
+    # 字体预检：字体由系统提供，这里只提醒「系统有没有中文字体」
+    for w in font_preflight():
+        say("  字体提醒：" + w)
 
     # 存档当日要点与主题综述（外加每个主题的篇数）：月报只读这些日报摘要
     from collections import Counter as _Counter
@@ -134,7 +126,6 @@ def build_category_report(
     except Exception as exc:  # noqa: BLE001
         log.warning("存档日报摘要失败（不影响出报告）：%s", exc)
 
-    reg, bold = resolve_fonts(cfg)
     ctx = ReportContext(
         category=category,
         category_name=report_name or _category_name(cfg, category),
@@ -150,9 +141,9 @@ def build_category_report(
         theme_order=order,
         llm_model=model,
         late_additions=int((extra or {}).get("late_additions", 0)),
-        font_regular=reg,
-        font_bold=bold,
         bilingual=(cfg.get("report_language", "zh") == "zh-en"),
+        font_css_text=font_css(cfg),
+        font_stack_text=font_stack(cfg),
         notice=str((extra or {}).get("notice", "")),
     )
     html_text = render_daily_html(ctx, math)

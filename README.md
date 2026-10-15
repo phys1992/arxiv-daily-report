@@ -21,13 +21,13 @@
 | **多分类去重** | 按 arXiv ID 全局去重：同一篇论文只调用一次模型，只出现在一份报告里 |
 | **仅统计新投稿** | 只收 v1 首次公开，忽略版本更新（可配置） |
 | **北京时间自然日** | 报告日按 `Asia/Shanghai` 自然日切分；自动回溯 7 天，周末/节假日延迟公告也能补录 |
-| **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；中文用**思源黑体**，字体随仓库分发，目标机器无需安装任何字体 |
+| **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；**字体使用系统字体**——西文用系统西文字体，汉字优先思源黑体、否则用系统默认中文字体 |
 | **公式排版** | MathJax 预渲染成 SVG（与 LaTeX 输出同一套 Computer Modern 字形），按公式哈希缓存 |
 | **论文清单** | 每篇给出作者、标题、arXiv 号与可点击链接（由代码从元数据生成，模型不参与）；不再单列参考文献表 |
 | **月度简报** | **每月 1 号**（北京时间）自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**不设字数上限**，力求准确的前提下简明扼要；正文只标注日期（如（10月13日）），不出现 arXiv 号 |
 | **Web 配置界面** | 模型/调度/路径/语言/分类订阅全部可视化配置，改完即时生效 |
 | **多模型支持** | DeepSeek、Kimi(Moonshot)、OpenAI、Claude(Anthropic)，以及任意**本地 OpenAI 兼容服务** |
-| **可迁移** | 全部路径相对项目根，支持 `GRQC_HOME` 重定位；无绝对路径硬编码 |
+| **可迁移** | 全部路径相对项目根，支持 `GRQC_HOME` 重定位；不打包字体与第三方库，仓库仅 1 MB 级 |
 | **测试** | 43 项离线测试（含用本地 mock 验证的两种模型协议适配） |
 | **安全** | 默认仅监听回环地址；对外绑定时强制密码；密钥掩码回显、`secrets.json` 权限 600 |
 
@@ -35,11 +35,14 @@
 
 ## 快速开始
 
+> 前置条件：Python 3.11+、WeasyPrint（用 `install.sh` 自动装）、
+> 系统库 pango/cairo、以及系统中文字体。详见下方[依赖与安装](#依赖与安装)。
+
 ```bash
 git clone <你的仓库地址> grqc-daily
 cd grqc-daily
 
-./install.sh                 # 创建 .venv 并安装依赖
+./install.sh                 # 创建 .venv 并安装 WeasyPrint
 # ./install.sh --with-math   # 可选：同时安装 MathJax（公式与 LaTeX 一致）
 
 export DEEPSEEK_API_KEY=sk-...      # 或稍后在 Web 界面里填
@@ -159,57 +162,71 @@ Base URL 填例如 `http://127.0.0.1:11434/v1`，密钥可留空。
 
 ---
 
-## 依赖
+## 依赖与安装
 
-| 层级 | 内容 | 必需性 |
-|---|---|---|
-| Python | **3.11+**，核心流程只用标准库 | 必需 |
-| Python 包 | WeasyPrint（+ 传递依赖），装在项目内 `.venv` | 必需 |
-| 系统库 | `libpango` / `libcairo`（桌面 Linux 一般已装） | 必需 |
-| 字体 | **思源黑体 SC + DejaVu Sans，随仓库分发** | 已内置 |
-| 可选 | Node + `mathjax-full`（公式与 LaTeX 一致） | 可选，缺失自动降级为 Unicode |
-| 可选 | Chromium（WeasyPrint 不可用时的 PDF 兜底） | 可选 |
+### 1. Python 与 WeasyPrint（必需）
 
-仓库自带字体意味着：**目标机器不装任何中文字体也能正确出 PDF**（含《通用规范汉字表》全部 8105 字，
-其中 196 个位于 CJK 扩展 B）。运行时会做字符覆盖自检，出现无法渲染的字符会在日志中明确告警。
-
----
-
-## 测试
+**本项目依赖 WeasyPrint 生成 PDF，不随仓库打包**，需要自行安装：
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -t . -v
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt      # 即 weasyprint
 ```
 
-43 项测试，**全部离线**（不需要密钥、不访问网络）：
+`install.sh` 会自动完成这一步（官方 PyPI 失败时依次尝试阿里云、清华镜像）：
 
-| 覆盖范围 | 说明 |
+```bash
+./install.sh
+```
+
+### 2. 系统库（WeasyPrint 需要）
+
+WeasyPrint 通过 pango 排版，需要以下系统库。**桌面版 Linux 通常已经装了**
+（GTK/Qt 应用的公共依赖），只有最小化服务器/容器需要手动补：
+
+| 发行版 | 安装命令 |
 |---|---|
-| `ModelsTest` | arXiv ID 解析、北京时间跨日边界、作者截断、引用条目 |
-| `AssignTest` | 交叉列表归属的三种策略 |
-| `StoreTest` | 去重、策略过滤、摘要持久化、公式缓存、报告版本号 |
-| `MathTest` | 公式抽取、Unicode 降级转换、无 MathJax 时的回退 |
-| `ConfigTest` | 默认值、存取往返、**密钥掩码不泄漏明文**、`secrets.json` 权限 600 |
-| `RenderTest` | 字体嵌入、**字符覆盖自检**、分类表与主题表完整性 |
-| `BilingualTest` | 中英对照的合并逻辑与版式 |
-| `LLMAdapterTest` | **用本地 mock 服务器**验证 OpenAI 与 Anthropic 两种线上协议的请求构造与响应解析 |
+| Debian / Ubuntu | `sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0` |
+| Fedora / RHEL | `sudo dnf install pango cairo gdk-pixbuf2` |
+| Arch / Manjaro | `sudo pacman -S pango cairo gdk-pixbuf2` |
+| openSUSE | `sudo zypper install pango cairo gdk-pixbuf` |
 
----
+> 若这些库缺失，程序会**自动降级到 Chromium 后端**（若已安装 Chromium），
+> 仍能出 PDF，但会失去页码与 PDF 书签，字体也会变成 Type 3。日志里会明确告警。
 
-## 环境变量
+### 3. 中文字体（必需）
 
-容器或 CI 部署时可以完全用环境变量覆盖配置，不必写文件：
+PDF 里的汉字由系统字体渲染。**请确保系统装了中文字体**，否则汉字会显示为方块：
 
-| 变量 | 作用 |
-|---|---|
-| `GRQC_HOME` | 可变状态（配置/密钥/数据/报告）的根目录 |
-| `GRQC_WEB_PASSWORD` | Web 访问密码（绑定非回环地址时**必需**） |
-| `GRQC_WEB_HOST` / `GRQC_WEB_PORT` | 监听地址与端口 |
-| `GRQC_PROVIDER` / `GRQC_MODEL` / `GRQC_BASE_URL` | 覆盖模型服务商与模型名 |
-| `GRQC_REPORT_LANGUAGE` / `GRQC_UI_LANGUAGE` | 报告语言 / 界面语言 |
-| `DEEPSEEK_API_KEY` 等 | 各厂商密钥（优先级高于 `secrets.json`） |
+```bash
+sudo apt install fonts-noto-cjk        # Debian/Ubuntu：思源黑体的发行版打包
+sudo dnf install google-noto-sans-cjk-fonts   # Fedora
+sudo pacman -S noto-fonts-cjk          # Arch
+```
 
----
+字体选用规则（无需配置）：
+
+1. 西文（英文、数字、符号）→ 系统的西文字体（DejaVu Sans / Liberation Sans / Noto Sans 等，逐个回退）
+2. 汉字 → **优先思源黑体**（`Source Han Sans SC` / `Noto Sans CJK SC`），没有则依次回退到
+   文泉驿微米黑、微软雅黑、苹方等，最后落到系统默认中文字体
+
+程序启动时会用 `fc-list` 检查中文字体是否存在，缺失时在日志里给出上面这些安装提示。
+
+想换字体就设 `report.font_family`（任意 CSS 字体列表），例如：
+
+```jsonc
+"report": {
+  "font_family": "\"Noto Serif CJK SC\", serif",   // 改用思源宋体
+  "font_file": ""                                 // 也可指定一个字体文件内联进来
+}
+```
+
+### 4. 可选组件
+
+| 组件 | 用途 | 安装 | 缺失时 |
+|---|---|---|---|
+| Node + MathJax | 公式排版与 LaTeX 一致 | `./install.sh --with-math` | 自动降级为 Unicode 公式表示 |
+| Chromium | WeasyPrint 不可用时的 PDF 兜底 | 系统包管理器 | 只能出 HTML/纯元数据 |
 
 ## 数据来源与合规
 
@@ -241,8 +258,7 @@ grqc-daily/
 │   ├── server.py           Web 后端（标准库 http.server）
 │   └── llm/                多厂商模型适配
 ├── web/                    纯静态配置界面
-├── assets/fonts/           思源黑体 + DejaVu
-├── assets/mathjax/         MathJax 预渲染脚本
+├── assets/mathjax/         MathJax 预渲染脚本（可选依赖）
 ├── data/                   arXiv 分类表、主题分类表
 ├── packaging/systemd/      systemd 用户服务模板
 ├── .github/workflows/      GitHub Actions 定时任务
@@ -264,9 +280,9 @@ Highlights:
   and appears in exactly one report).
 - Beijing-time calendar day with a 7-day catch-up window, so delayed weekend/holiday announcements
   are never lost.
-- PDF with page numbers, running headers, bookmarks and clickable links. **Fonts ship with the
-  repository** (Source Han Sans SC + DejaVu Sans), so no system font installation is required —
-  including full coverage of the 8,105-character *Table of General Standard Chinese Characters*.
+- PDF with page numbers, running headers, bookmarks and clickable links. **Fonts come from the
+  system**: Latin text uses the system's Latin font, CJK text prefers Source Han Sans (falling back
+  to the system's default Chinese font). See *Dependencies* above for what to install.
 - Formula typesetting via MathJax pre-rendered to SVG (same Computer Modern outlines as LaTeX),
   cached by formula hash.
 - References (authors, title, arXiv ID, URL) are generated from metadata by code, never by the model.
@@ -285,5 +301,4 @@ Metadata comes from the arXiv API (CC0) under its
 
 ## License
 
-代码以 **MIT** 授权；内置字体为 **SIL OFL 1.1**（思源黑体）与 Bitstream Vera 系许可（DejaVu）。
-详见 [LICENSE](LICENSE)。
+代码以 **MIT** 授权。本项目**不分发字体文件**，PDF 使用系统字体；详见 [LICENSE](LICENSE)。

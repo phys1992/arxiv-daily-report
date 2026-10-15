@@ -102,8 +102,20 @@ print(f"  {'✓' if exe else '·'} Chromium 兜底后端：{exe or '未安装（
 node = shutil.which("node")
 mj = (__import__('pathlib').Path('assets/mathjax/node_modules/mathjax-full')).exists()
 print(f"  {'✓' if mj else '·'} MathJax 公式渲染：{'已安装' if mj else f'未安装（node={node or \"无\"}）'}")
-fonts = __import__('pathlib').Path('assets/fonts')
-print(f"  {'✓' if (fonts/'SourceHanSansSC-Regular.otf').exists() else '✗'} 内置中文字体：思源黑体")
+import shutil as _sh, subprocess as _sp
+if _sh.which("fc-list"):
+    zh = _sp.run(["fc-list", ":lang=zh-cn", "family"], capture_output=True, text=True).stdout.strip()
+    if not zh:
+        print("  ✗ 系统中文字体：未检测到（报告里的汉字会显示为方块）")
+        print("      Debian/Ubuntu: sudo apt install fonts-noto-cjk")
+        print("      Fedora:        sudo dnf install google-noto-sans-cjk-fonts")
+        print("      Arch:          sudo pacman -S noto-fonts-cjk")
+    elif "source han" in zh.lower() or "\u601d\u6e90" in zh:
+        print("  ✓ 系统中文字体：思源黑体")
+    else:
+        print("  · 系统中文字体：有（未检测到思源黑体，将使用系统默认中文字体）")
+else:
+    print("  · 未找到 fc-list，跳过中文字体检查")
 sys.exit(0 if ok else 1)
 PY
 SELFCHECK=$?

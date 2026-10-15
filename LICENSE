@@ -21,25 +21,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 -------------------------------------------------------------------------------
-第三方资源
+第三方资源与依赖
 -------------------------------------------------------------------------------
 
-1. 字体：思源黑体 Source Han Sans SC（assets/fonts/SourceHanSansSC-*.otf）
-   版权所有 (c) 2014-2025 Adobe (http://www.adobe.com/)，
-   以 SIL Open Font License 1.1 授权，许可证原文见
-   assets/fonts/LICENSE-SourceHanSans.txt 。
-   本项目原样分发官方发布的字体文件，未作任何修改；
-   字体名中的 "Source" 为 Adobe 的 Reserved Font Name，
-   因此请勿对字体文件做修改后再以原名分发。
+1. 本项目**不分发任何字体文件**。PDF 里的中英文字体由运行环境提供：
+   西文使用系统的西文字体，汉字使用系统的中文字体（优先思源黑体/Source Han Sans、
+   Noto Sans CJK，其次系统默认中文字体）。字体本身的授权与再分发条件请遵循
+   你所使用系统的字体包。
 
-2. 字体：DejaVu Sans（assets/fonts/DejaVuSans*.ttf）
-   版权归 Bitstream, Inc. 与 Tavmjong Bah 所有，DejaVu 的改动已置于公有领域。
-   详见 https://dejavu-fonts.github.io/License.html 。
-
-3. 数据：本项目的论文元数据来自 arXiv API。
+2. 数据：论文元数据来自 arXiv API。
    arXiv 元数据以 CC0 1.0 公有领域声明发布，可自由存储、转换与分享；
    使用 arXiv API 须遵守其使用条款（每 3 秒至多 1 次请求、不得转存 PDF 全文）：
    https://info.arxiv.org/help/api/tou.html
    本项目与 arXiv.org 无任何官方关联。
 
-4. 可选组件：MathJax（assets/mathjax/，通过 npm 安装，Apache-2.0 授权）。
+3. 可选组件：MathJax（assets/mathjax/，通过 npm 安装，Apache-2.0 授权）。
+
+4. 依赖：WeasyPrint 及其传递依赖（BSD/MIT 等宽松许可）由用户自行安装，
+   本项目不以任何形式打包或再分发它们。

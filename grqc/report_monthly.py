@@ -22,7 +22,8 @@ from .config import Config
 from .llm.client import LLMClient, LLMError
 from .models import Paper
 from .pdf import render_pdf
-from .render import base_css, coverage_check, font_css, load_theme_taxonomy, resolve_fonts
+from .render import (base_css, font_css, font_preflight, font_stack,
+                     load_theme_taxonomy)
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -387,7 +388,6 @@ def render_monthly_html(cfg: Config, data: MonthlyData, *, scope_name: str) -> s
     if lang not in ("zh", "en"):
         lang = "zh"
     labels, _order = load_theme_taxonomy(cfg.data_asset("theme_taxonomy.json"))
-    reg, bold = resolve_fonts(cfg)
     tz = cfg["schedule"].get("timezone", "Asia/Shanghai")
     generated = dt.datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d %H:%M %Z")
     y, m = data.month.split("-")
@@ -412,8 +412,8 @@ def render_monthly_html(cfg: Config, data: MonthlyData, *, scope_name: str) -> s
 
     parts = ["<!doctype html><html><head><meta charset='utf-8'>"]
     parts.append(f"<title>{html.escape(title)}</title><style>")
-    parts.append(font_css(cfg.assets_dir, reg, bold))
-    parts.append(base_css(f"{scope_name} · {data.month}", ""))
+    parts.append(font_css(cfg))
+    parts.append(base_css(f"{scope_name} · {data.month}", "", font_stack(cfg)))
     parts.append("""
 .abstract { background:#f6f8fb; border-left:3px solid #6f9fdc; padding:3.5mm 4.5mm; margin-bottom:5mm; }
 .abstract p { margin:0 0 1.8mm; }
@@ -526,9 +526,8 @@ def run_monthly(
     else:
         say("  已跳过模型（--no-llm），只出统计版简报")
 
-    missing = coverage_check(cfg.assets_dir, [data.overview] + [t["text"] for t in data.theme_notes])
-    if missing:
-        say("  警告：有字符不在随仓库分发的字体中：" + " ".join(missing[:10]))
+    for w in font_preflight():
+        say("  字体提醒：" + w)
 
     html_text = render_monthly_html(cfg, data, scope_name=scope)
     out_dir = cfg.resolve("reports/monthly")

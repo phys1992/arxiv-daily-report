@@ -50,9 +50,8 @@
     "disable_thinking": true
   },
   "report": {
-    "font_profile": "source-han",
-    "font_file_regular": "",
-    "font_file_bold": "",
+    "font_family": "",
+    "font_file": "",
     "math_backend": "auto",
     "include_daily_highlights": true,
     "include_abstract_note": true,

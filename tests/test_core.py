@@ -19,7 +19,7 @@ from grqc.collect import assign, enabled_categories, target_day  # noqa: E402
 from grqc.config import Config, DEFAULT_CONFIG  # noqa: E402
 from grqc.mathrender import MathService, unicode_math  # noqa: E402
 from grqc.models import Paper, parse_arxiv_id  # noqa: E402
-from grqc.render import coverage_check, font_css, resolve_fonts  # noqa: E402
+from grqc.render import font_css, font_preflight, font_stack  # noqa: E402
 from grqc.store import Store  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -200,7 +200,7 @@ class ConfigTest(HermeticTestCase):
     def test_defaults(self):
         self.assertEqual(self.cfg["subscriptions"][0]["category"], "gr-qc")
         self.assertEqual(self.cfg["schedule"]["timezone"], "Asia/Shanghai")
-        self.assertEqual(self.cfg["report"]["font_profile"], "source-han")
+        self.assertEqual(self.cfg["report"]["font_family"], "")   # 空 = 内置默认字体栈
         self.assertTrue(self.cfg["llm"]["disable_thinking"])
 
     def test_save_reload_and_patch(self):
@@ -299,21 +299,46 @@ class ConfigTest(HermeticTestCase):
 
 
 class RenderTest(unittest.TestCase):
-    def test_font_css_embeds_bundled_fonts(self):
-        cfg = Config(path=Path("/tmp/grqc-render-test.json"))
-        reg, bold = resolve_fonts(cfg)
-        self.assertIsNotNone(reg, "仓库应自带思源黑体 Regular")
-        self.assertTrue(reg.exists())
-        css = font_css(PROJECT / "assets", reg, bold)
-        self.assertIn("@font-face", css)
-        self.assertIn("SourceHanSansSC-Regular.otf", css)
-        self.assertIn("GRQC Latin", css)          # DejaVu 兜底也在字体栈里
+    def test_font_stack_is_latin_first_then_cjk(self):
+        """字体栈顺序决定「英文用西文字体、汉字用中文字体」，不能反过来。"""
+        stack = font_stack()
+        self.assertIn("sans-serif", stack)
+        # 西文族在前
+        self.assertLess(stack.index("DejaVu Sans"), stack.index("Source Han Sans SC"))
+        # 中文字体族都在，且思源黑体优先
+        for fam in ("Source Han Sans SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei",
+                    "Microsoft YaHei"):
+            self.assertIn(fam, stack)
+        self.assertLess(stack.index("Source Han Sans SC"), stack.index("Microsoft YaHei"))
+
+    def test_font_stack_honours_config_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json",
+                         overrides={"report": {"font_family": '"My Font", serif'}})
+            self.assertEqual(font_stack(cfg), '"My Font", serif')
+            # 留空则回到默认栈
+            cfg.update({"report": {"font_family": ""}})
+            self.assertIn("Source Han Sans SC", font_stack(cfg))
+
+    def test_font_css_has_no_bundled_fonts(self):
+        """默认不再输出任何 @font-face：字体由系统提供。"""
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json")
+            css = font_css(cfg)
+            self.assertNotIn("@font-face", css)
+            self.assertIn("html{font-family:", css)
+            self.assertIn("body{font-family:", css)
+            self.assertIn("Source Han Sans SC", css)
+            # 自定义字体文件才会产生 @font-face
+            cfg.update({"report": {"font_file": str(PROJECT / "README.md")}})
+            self.assertIn("@font-face", font_css(cfg))
+
+    def test_no_bundled_font_files_in_repo(self):
+        self.assertFalse((PROJECT / "assets/fonts").exists(),
+                         "字体不应再随仓库分发")
 
     def test_page_margin_boxes_declare_font_stack(self):
-        """回归：页眉页脚不继承 body 的字体，必须显式声明。
-
-        否则页码会用系统默认字体（中文 Linux 上会落到宋体），与正文不一致。
-        """
+        """回归：页眉页脚不继承 body 的字体，必须显式声明。"""
         from grqc.render import base_css
 
         css = base_css("gr-qc · 2026-10-13", "")
@@ -321,47 +346,30 @@ class RenderTest(unittest.TestCase):
             self.assertIn(box, css)
             segment = css.split(box, 1)[1].split("}", 1)[0]
             self.assertIn("font-family", segment, f"{box} 缺少 font-family")
+        self.assertIn("Source Han Sans SC", css)
 
-    def test_font_stack_puts_bundled_fonts_first(self):
-        from grqc.render import font_stack
+    def test_font_preflight_reports_missing_cjk(self):
+        """没有中文字体时要给出可操作的告警。"""
+        from unittest import mock
 
-        stack = font_stack()
-        self.assertTrue(stack.startswith('"GRQC Sans", "GRQC Latin"'))
-        self.assertLess(stack.index("GRQC Sans"), stack.index("PingFang SC"))
+        from grqc import render as _r
 
-    def test_coverage_check_detects_missing_glyph(self):
-        # 🚀(U+1F680)/藏文 都不在思源黑体与 DejaVu 的覆盖范围内
-        missing = coverage_check(PROJECT / "assets", ["正常中文 ABC", "\U0001F680", "\u0F00"])
-        self.assertIn("\U0001F680", missing)
-        self.assertIn("\u0F00", missing)
-        self.assertNotIn("中", missing)
+        fake = mock.Mock(return_value=mock.Mock(stdout="", returncode=0))
+        with mock.patch.object(_r, "font_stack", return_value="sans-serif"):
+            with mock.patch("shutil.which", return_value="/usr/bin/fc-list"):
+                with mock.patch("subprocess.run", fake):
+                    warns = font_preflight()
+        self.assertTrue(warns, "应给出缺少中文字体的告警")
+        self.assertIn("中文字体", warns[0])
 
-    def test_coverage_check_matches_font_cmaps(self):
-        """与字体 cmap 独立计算的结果保持一致（防止实现悄悄漏检）。"""
-        from fontTools.ttLib import TTFont
+    def test_font_preflight_silent_when_fonts_present(self):
+        from unittest import mock
 
-        covered: set[int] = set()
-        for name in ("SourceHanSansSC-Regular.otf", "SourceHanSansSC-Bold.otf",
-                     "DejaVuSans.ttf", "DejaVuSans-Bold.ttf"):
-            f = TTFont(str(PROJECT / "assets/fonts" / name), lazy=True)
-            for t in f["cmap"].tables:
-                covered |= set(t.cmap.keys())
-            f.close()
-        probe = "中文测试 ABC ř α ≤ \U0001F680 \u0F00 \U0001D11E"
-        expected: list[str] = []
-        for ch in probe:
-            if not ch.strip() or ch in expected:
-                continue
-            if ord(ch) not in covered:
-                expected.append(ch)
-        self.assertEqual(coverage_check(PROJECT / "assets", [probe]), expected)
-
-    def test_coverage_check_passes_for_usual_text(self):
-        missing = coverage_check(
-            PROJECT / "assets",
-            ["黑洞引力波量子宇宙学", "Hořava-Lifshitz", "F(R) 修改引力", "α β φ⁴ ≤ ≥ ×"],
-        )
-        self.assertEqual(missing, [])
+        fake = mock.Mock(return_value=mock.Mock(
+            stdout="思源黑体\nSource Han Sans SC\nNoto Sans CJK SC\n", returncode=0))
+        with mock.patch("shutil.which", return_value="/usr/bin/fc-list"):
+            with mock.patch("subprocess.run", fake):
+                self.assertEqual(font_preflight(), [])
 
     def test_category_and_theme_assets_are_complete(self):
         cats = json.loads((PROJECT / "data/arxiv_categories.json").read_text(encoding="utf-8"))
@@ -456,13 +464,12 @@ class BilingualTest(unittest.TestCase):
         try:
             svc = MathService(store, assets_dir=PROJECT / "assets", backend="unicode")
             cfg = Config(path=Path(tmp.name) / "c.json")
-            reg, bold = resolve_fonts(cfg)
             ctx = ReportContext(
                 category="gr-qc", category_name="General Relativity and Quantum Cosmology",
                 day="2026-10-13", papers=[make_paper(summary="中文要点\nEnglish note",
                                                     themes=["blackhole"])],
                 assets_dir=PROJECT / "assets", bilingual=True,
-                font_regular=reg, font_bold=bold,
+                font_css_text=font_css(cfg),
                 theme_labels={"blackhole": ("黑洞物理", "Black Holes"), "other": ("其他", "Other")},
                 theme_order=["blackhole", "other"],
             )
@@ -628,11 +635,10 @@ class MonthlyTest(HermeticTestCase):
             try:
                 svc = MathService(store, assets_dir=PROJECT / "assets", backend="unicode")
                 cfg = self._cfg(td)
-                reg, bold = resolve_fonts(cfg)
                 ctx = ReportContext(
                     category="gr-qc", category_name="gr-qc", day="2026-10-13",
                     papers=[make_paper()], assets_dir=PROJECT / "assets",
-                    font_regular=reg, font_bold=bold,
+                    font_css_text=font_css(cfg),
                     theme_labels={"other": ("其他", "Other")}, theme_order=["other"],
                 )
                 out = render_daily_html(ctx, svc)

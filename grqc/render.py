@@ -40,10 +40,10 @@ class ReportContext:
     theme_order: list[str] = field(default_factory=list)
     llm_model: str = ""
     late_additions: int = 0
-    font_regular: Path | None = None
-    font_bold: Path | None = None
     notice: str = ""
     bilingual: bool = False
+    font_css_text: str = ""      # 由调用方用 font_css(cfg) 生成；空则用默认栈
+    font_stack_text: str = ""    # 由调用方用 font_stack(cfg) 生成
 
 
 # ---------------------------------------------------------------------------
@@ -68,116 +68,105 @@ def load_theme_taxonomy(path: Path) -> tuple[dict[str, tuple[str, str]], list[st
     return labels, order
 
 
-def font_stack() -> str:
-    """正文字体栈：内置思源黑体 → 内置 DejaVu → 系统常见中文字体 → 兜底。"""
-    return (
-        '"GRQC Sans", "GRQC Latin", "Source Han Sans SC", "Noto Sans CJK SC", '
-        '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif'
-    )
+# 字体由系统提供，不再随仓库分发。
+# 顺序规则：西文在前，中文在后。
+#   西文字体列表负责英文/数字/符号；汉字在西文字体里没有字形，会自动回退到中文字体列表。
+#   若把中文字体放前面，英文也会用中文字体的拉丁字形 —— 所以顺序不能反。
+DEFAULT_LATIN_FONTS = (
+    '"DejaVu Sans", "Liberation Sans", "Noto Sans", "Nimbus Sans", '
+    '"Helvetica Neue", Helvetica, Arial'
+)
+DEFAULT_CJK_FONTS = (
+    '"Source Han Sans SC", "Noto Sans CJK SC", "Noto Sans SC", "\u601d\u6e90\u9ed1\u4f53", '
+    '"WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Microsoft YaHei", "PingFang SC", '
+    '"SimHei", "AR PL UMing CN"'
+)
 
 
-def font_css(assets_dir: Path, regular: Path | None, bold: Path | None) -> str:
-    """生成 @font-face；文件缺失时退回系统字体栈。
+def font_stack(cfg=None) -> str:
+    """正文字体栈（西文优先 + 中文回退 + 系统兜底）。"""
+    if cfg is not None:
+        custom = (cfg["report"].get("font_family") or "").strip()
+        if custom:
+            return custom
+    return f"{DEFAULT_LATIN_FONTS}, {DEFAULT_CJK_FONTS}, sans-serif"
 
-    思源黑体的拉丁扩展覆盖不全（例如 ř U+0159），因此随仓库再带一份
-    DejaVu Sans 作为非中日韩字符的兜底，保证目标机器不装任何字体也不出豆腐块。
+
+def font_css(cfg) -> str:
+    """生成字体相关 CSS。
+
+    默认不产生任何 @font-face：中英文字体都交给系统提供（见 README 的字体要求）。
+    只有在用户显式配置了 font_file 时才把它内联进来并置于栈首。
     """
     faces: list[str] = []
-    fam = '"GRQC Sans"'
-    latin = '"GRQC Latin"'
-    if regular and Path(regular).exists():
+    custom = resolve_font_file(cfg)
+    family = '"GRQC Custom"'
+    if custom is not None:
+        fmt = "truetype" if custom.suffix.lower() in (".ttf", ".ttc") else "opentype"
         faces.append(
-            f'@font-face{{font-family:{fam};font-weight:400;font-style:normal;'
-            f'src:url("{Path(regular).resolve().as_uri()}") format("opentype");}}'
+            f'@font-face{{font-family:{family};src:url("{custom.as_uri()}") format("{fmt}");}}'
         )
-    if bold and Path(bold).exists():
-        faces.append(
-            f'@font-face{{font-family:{fam};font-weight:700;font-style:normal;'
-            f'src:url("{Path(bold).resolve().as_uri()}") format("opentype");}}'
-        )
-    fonts_dir = Path(assets_dir) / "fonts"
-    for w, weight in (("DejaVuSans.ttf", 400), ("DejaVuSans-Bold.ttf", 700)):
-        f = fonts_dir / w
-        if f.exists():
-            faces.append(
-                f'@font-face{{font-family:{latin};font-weight:{weight};font-style:normal;'
-                f'src:url("{f.resolve().as_uri()}") format("truetype");}}'
-            )
-    stack = font_stack()
-    # 同时设在 html 上：@page 的页眉页脚不会继承 body，必须由边距框自己声明，
-    # 否则页码会用系统默认字体（在中文 Linux 上会变成宋体），与正文不一致。
-    return (
-        "\n".join(faces)
-        + f"\nhtml{{font-family:{stack};}}"
-        + f"\nbody{{font-family:{stack};}}"
-    )
+    stack = f"{family}, {font_stack(cfg)}" if faces else font_stack(cfg)
+    # html 与 body 都要声明：@page 的页眉页脚不继承 body 的字体
+    return "\n".join(faces) + f"\nhtml{{font-family:{stack};}}\nbody{{font-family:{stack};}}"
 
 
-def resolve_fonts(cfg) -> tuple[Path | None, Path | None]:
-    """按配置解析正文字体文件（返回 常规体, 粗体）。"""
-    rep = cfg["report"]
-    profile = rep.get("font_profile", "source-han")
-    if profile == "system":
-        return None, None
-    if profile == "custom":
-        r = rep.get("font_file_regular") or ""
-        b = rep.get("font_file_bold") or ""
-        return (cfg.resolve(r) if r else None), (cfg.resolve(b) if b else None)
-    fonts = cfg.assets_dir / "fonts"
-    reg = fonts / "SourceHanSansSC-Regular.otf"
-    bold = fonts / "SourceHanSansSC-Bold.otf"
-    return (reg if reg.exists() else None), (bold if bold.exists() else None)
+def resolve_font_file(cfg) -> Path | None:
+    """用户可选的自定义字体文件。默认没有，即完全使用系统字体。"""
+    f = (cfg["report"].get("font_file") or "").strip()
+    if not f:
+        return None
+    p = cfg.resolve(f)
+    if not p.exists():
+        log.warning("配置的字体文件不存在：%s", p)
+        return None
+    return p
 
 
-def coverage_check(assets_dir: Path, texts: list[str]) -> list[str]:
-    """自检：报告里出现的字符是否都被随仓库分发的字体覆盖。
+def font_preflight() -> list[str]:
+    """检查系统字体是否够用，返回告警列表（不阻断出报告）。
 
-    返回未被覆盖的字符列表（会打印告警，绝不静默出豆腐块）。
+    以前是逐字符比对随仓库分发的字体 cmap；现在字体由系统提供，
+    改为向 fontconfig 询问：系统到底有没有中文字体。
     """
+    import shutil as _shutil
+    import subprocess as _sp
+
+    warnings: list[str] = []
+    if not _shutil.which("fc-list"):
+        return warnings                       # 没有 fontconfig 就跳过检查
     try:
-        from fontTools.ttLib import TTFont
-    except Exception:
-        return []
-    fonts_dir = Path(assets_dir) / "fonts"
-    covered: set[int] = set()
-    for name in (
-        "SourceHanSansSC-Regular.otf",
-        "SourceHanSansSC-Bold.otf",
-        "DejaVuSans.ttf",
-        "DejaVuSans-Bold.ttf",
-    ):
-        p = fonts_dir / name
-        if not p.exists():
-            continue
-        try:
-            f = TTFont(str(p), lazy=True)
-            for t in f["cmap"].tables:
-                covered |= set(t.cmap.keys())
-            f.close()
-        except Exception:
-            continue
-    if not covered:
-        return []
-    missing: list[str] = []
-    seen: set[str] = set()
-    for t in texts:
-        for ch in t or "":
-            if ch in seen or not ch.strip():
-                continue
-            seen.add(ch)
-            if ord(ch) not in covered:
-                missing.append(ch)
-    return missing
+        out = _sp.run(["fc-list", ":lang=zh-cn", "family"],
+                      capture_output=True, text=True, timeout=20).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return warnings
+    if not out:
+        warnings.append(
+            "系统没有检测到任何中文字体，报告里的汉字会显示为方块。"
+            "请安装中文字体，例如 Debian/Ubuntu：sudo apt install fonts-noto-cjk；"
+            "Fedora：sudo dnf install google-noto-sans-cjk-fonts。"
+        )
+        return warnings
+    flat = out.lower()
+    if "source han" not in flat and "\u601d\u6e90" not in flat:
+        warnings.append(
+            "未检测到思源黑体，将使用系统默认中文字体（可正常显示，字形风格可能不同）。"
+            "安装思源黑体可得到稳定一致的排版：sudo apt install fonts-noto-cjk"
+        )
+    return warnings
 
 
-def base_css(header_text: str, footer_text: str) -> str:
+
+def base_css(header_text: str, footer_text: str = "", stack: str | None = None) -> str:
+    """页面样式。页眉页脚必须显式声明字体栈（它们不继承 body）。"""
+    fam = stack or font_stack()
     return f"""
 @page {{
   size: A4;
   margin: 18mm 16mm 20mm 16mm;
   @bottom-center {{ content: "第 " counter(page) " 页 / 共 " counter(pages) " 页";
-                    font-family: {font_stack()}; font-size: 8.5pt; color: #666; }}
-  @top-right {{ content: "{header_text}"; font-family: {font_stack()};
+                    font-family: {fam}; font-size: 8.5pt; color: #666; }}
+  @top-right {{ content: "{header_text}"; font-family: {fam};
                 font-size: 8.5pt; color: #999; }}
 }}
 @page :first {{ @top-right {{ content: ""; }} }}
@@ -246,11 +235,12 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
     generated = ctx.generated_at or dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
     parts: list[str] = []
+    stack = ctx.font_stack_text or font_stack()
     parts.append("<!doctype html><html><head><meta charset='utf-8'>")
     parts.append(f"<title>{html.escape(ctx.category)} {ctx.day}</title>")
     parts.append("<style>")
-    parts.append(font_css(ctx.assets_dir, ctx.font_regular, ctx.font_bold))
-    parts.append(base_css(header_text, ""))
+    parts.append(ctx.font_css_text or f"body{{font-family:{stack};}}")
+    parts.append(base_css(header_text, "", stack))
     parts.append("</style></head><body>")
 
     # 标题
