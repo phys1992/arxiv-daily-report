@@ -33,8 +33,18 @@ def load_taxonomy_raw(path: Path) -> list[dict]:
 
 
 def _out_dir(cfg: Config, sub: dict) -> Path:
-    base = sub.get("out_dir") or f"reports/{sub['category']}"
-    return cfg.resolve(base)
+    """分类报告的**根**目录；具体某一天再按月分一层（见 build_category_report）。
+
+    长期运行下 `reports/gr-qc/` 会堆几百个 PDF，按月分层后：
+        reports/gr-qc/2026-10/2026-10-13.pdf
+        reports/gr-qc/2026-11/2026-11-01.pdf
+        reports/gr-qc/latest.pdf          <- 最新一期，路径固定不变
+    """
+    custom = (sub.get("out_dir") or "").strip()
+    if custom:
+        return cfg.resolve(custom)
+    # 默认落在 paths.reports 下（而不是写死 reports/），这样自定义报告目录对日报同样生效
+    return cfg.reports_dir / sub["category"]
 
 
 def _category_name(cfg: Config, category: str) -> str:
@@ -183,10 +193,12 @@ def build_category_report(
     )
     html_text = render_daily_html(ctx, math)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # 输出目录按月分一层，避免单目录文件过多；latest.pdf 仍放在分类根目录
+    month_dir = out_dir / day[:7]          # YYYY-MM
+    month_dir.mkdir(parents=True, exist_ok=True)
     if cfg["report"].get("keep_html"):
-        (out_dir / f"{day}.html").write_text(html_text, encoding="utf-8")
-    pdf_path = out_dir / f"{day}.pdf"
+        (month_dir / f"{day}.html").write_text(html_text, encoding="utf-8")
+    pdf_path = month_dir / f"{day}.pdf"
     _, backend = render_pdf(html_text, pdf_path, base_url=cfg.assets_dir)
     say(f"  PDF 生成（{backend}）：{pdf_path}")
 
@@ -288,7 +300,8 @@ def run_daily(
             allp = store.all_papers_on(tz_name, day)
             allp = [p for p in allp if any(c in cats for c in store.categories_of(p.uid))]
             if allp:
-                out = cfg.resolve(cfg.get("combined_out_dir") or "reports/combined")
+                combined = (cfg.get("combined_out_dir") or "").strip()
+                out = cfg.resolve(combined) if combined else cfg.reports_dir / "combined"
                 path, _ = build_category_report(
                     cfg, store, category="combined", day=day, papers=allp, math=math,
                     use_llm=use_llm, out_dir=out, report_name="arXiv（合并）", progress=say,

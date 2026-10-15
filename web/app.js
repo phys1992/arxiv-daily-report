@@ -630,8 +630,10 @@
     if (root && rel.indexOf(root + '/') === 0) {
       rel = rel.slice(root.length + 1);
     } else {
+      // 兜底：拿不到 reports_dir 时，按 <分类>/<月份>/<文件> 取最后三段
+      // （日报 gr-qc/2026-10/2026-10-13.pdf；月报 monthly/gr-qc/2026-10.pdf）
       var parts = rel.split('/').filter(Boolean);
-      rel = parts.slice(-2).join('/');
+      rel = parts.slice(-3).join('/');
     }
     return '/reports/' + rel.split('/').map(encodeURIComponent).join('/');
   }

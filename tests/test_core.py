@@ -1072,6 +1072,96 @@ class MonthlyCitationTest(HermeticTestCase):
         self.assertNotIn("<script>", linkify_arxiv("<script>x</script>"))
 
 
+class OutputLayoutTest(HermeticTestCase):
+    """产物目录分层：日报按月一层、月报按分类一层，避免单目录堆太多文件。"""
+
+    def _cfg(self, td: Path):
+        return Config(path=td / "config.json", overrides={
+            "paths": {"reports": str(td / "reports"), "data": str(td / "data"),
+                      "cache": str(td / "cache")},
+            "subscriptions": [{"category": "gr-qc", "enabled": True,
+                               "report_name": "", "out_dir": ""}],
+        })
+
+    def _paper(self, aid="2610.12345"):
+        return Paper.from_dict({
+            "arxiv_id": aid, "version": 1, "title": "T " + aid, "abstract": "A",
+            "authors": ["X"], "categories": ["gr-qc"], "primary_category": "gr-qc",
+            "announced": "2026-10-13T00:00:00Z", "updated": "2026-10-13T00:00:00Z",
+            "summary": "s", "themes": ["blackhole"], "comment": "", "journal_ref": "",
+            "doi": "", "abs_url": "", "pdf_url": "",
+        })
+
+    def test_daily_goes_into_month_subdir(self):
+        """reports/gr-qc/2026-10/2026-10-13.pdf，latest.pdf 留在分类根目录。"""
+        from arxiv_daily_report.report_daily import build_category_report, _out_dir
+        from arxiv_daily_report.mathrender import MathService
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            store = Store(tmp / "data" / "state.sqlite3")
+            try:
+                svc = MathService(store, assets_dir=PROJECT / "assets", backend="unicode")
+                base = _out_dir(cfg, cfg["subscriptions"][0])
+                path, _backend = build_category_report(
+                    cfg, store, category="gr-qc", day="2026-10-13",
+                    papers=[self._paper()], math=svc, use_llm=False, out_dir=base,
+                )
+                self.assertEqual(path.parent.name, "2026-10")
+                self.assertEqual(path.name, "2026-10-13.pdf")
+                self.assertTrue(path.exists())
+                # latest.pdf 在分类根目录，路径不随月份变化
+                self.assertTrue((base / "latest.pdf").exists())
+                self.assertFalse((base / "2026-10-13.pdf").exists())
+            finally:
+                store.close()
+
+    def test_daily_keeps_same_month_together(self):
+        from arxiv_daily_report.report_daily import build_category_report, _out_dir
+        from arxiv_daily_report.mathrender import MathService
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            store = Store(tmp / "data" / "state.sqlite3")
+            try:
+                svc = MathService(store, assets_dir=PROJECT / "assets", backend="unicode")
+                base = _out_dir(cfg, cfg["subscriptions"][0])
+                for day in ("2026-10-13", "2026-11-02"):
+                    build_category_report(
+                        cfg, store, category="gr-qc", day=day,
+                        papers=[self._paper()], math=svc, use_llm=False, out_dir=base,
+                    )
+                self.assertTrue((base / "2026-10" / "2026-10-13.pdf").exists())
+                self.assertTrue((base / "2026-11" / "2026-11-02.pdf").exists())
+                # 只有两个月份目录 + latest.pdf
+                self.assertEqual(sorted(x.name for x in base.iterdir()),
+                                 ["2026-10", "2026-11", "latest.pdf"])
+            finally:
+                store.close()
+
+    def test_monthly_goes_into_category_subdir(self):
+        """reports/monthly/gr-qc/2026-10.pdf。"""
+        from arxiv_daily_report.report_monthly import run_monthly
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            store = Store(tmp / "data" / "state.sqlite3")
+            try:
+                store.save_day_digest("2026-10-13", "gr-qc", highlights="h",
+                                      themes={"blackhole": "n"}, theme_counts={"blackhole": 1},
+                                      papers=[{"id": "2610.12345", "title": "T"}], count=1)
+                paths = run_monthly(cfg, store, month="2026-10", use_llm=False)
+                self.assertEqual(len(paths), 1)
+                rel = paths[0].relative_to(cfg.reports_dir)
+                self.assertEqual(str(rel), "monthly/gr-qc/2026-10.pdf")
+                self.assertTrue(paths[0].exists())
+            finally:
+                store.close()
+
+
 class PackageVerifierTest(HermeticTestCase):
     """安装包校验器：必须能真正读到内层文件（deb 用 bsdtar 只能看到 ar 成员）。"""
 

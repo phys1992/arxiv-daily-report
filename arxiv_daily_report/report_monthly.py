@@ -752,8 +752,13 @@ def run_monthly(
     tz = cfg["schedule"].get("timezone", "Asia/Shanghai")
     if not month:
         month = target_month(tz=tz)
-    subs = cfg.get("subscriptions", [])
-    scope = subs[0].get("category", "gr-qc") if len(subs) == 1 else "arXiv"
+    subs = [x for x in cfg.get("subscriptions", []) if x.get("enabled", True)]
+    single = subs[0].get("category", "gr-qc") if len(subs) == 1 else "arXiv"
+    # 月报按分类分目录，避免 reports/monthly/ 越堆越乱：
+    #   reports/monthly/gr-qc/2026-10.pdf
+    #   reports/monthly/arXiv/2026-10.pdf   （订阅多个分类时的合并简报）
+    scope_slug = re.sub(r"[^A-Za-z0-9._-]", "_", str(single)) or "arXiv"
+    scope = single
     lang = cfg.get("report_language", "zh")
 
     say(f"生成月报：{month}（范围 {scope}，来源：该月日报）")
@@ -790,7 +795,8 @@ def run_monthly(
         say("  字体提醒：" + w)
 
     html_text = render_monthly_html(cfg, data, scope_name=scope)
-    out_dir = cfg.resolve("reports/monthly")
+    # 跟随 paths.reports（而不是写死 reports/），自定义报告目录时月报也一起搬过去
+    out_dir = cfg.reports_dir / "monthly" / scope_slug
     out_dir.mkdir(parents=True, exist_ok=True)
     pdf = out_dir / f"{month}.pdf"
     _, backend = render_pdf(html_text, pdf, base_url=cfg.assets_dir)
