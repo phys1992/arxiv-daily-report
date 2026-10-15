@@ -127,23 +127,56 @@ sudo pacman -S noto-fonts-cjk                    # Arch
 
 ## 快速开始
 
+### 直接运行（源码目录，零安装）
+
+clone 下来就能跑——**不装任何 Python 包也能出 PDF**（会自动选用 Chromium 后端）：
+
 ```bash
-# 安装包方式
-arxiv-daily-report serve            # 打开 Web 配置界面，填模型密钥
-arxiv-daily-report daily            # 生成昨天（北京时间）的日报
+git clone <你的仓库地址> arxiv-daily-report
+cd arxiv-daily-report
 
-# 源码方式
-.venv/bin/python run.py serve
-.venv/bin/python run.py daily
-
-# 也可以直接用环境变量给密钥
-export DEEPSEEK_API_KEY=sk-...
+python3 run.py                    # 不带参数：显示用法、界面地址与当前状态
+python3 run.py serve              # 启动 Web 配置界面（填模型密钥）
+python3 run.py daily              # 抓取并生成昨天的日报 PDF
+python3 run.py daily --no-llm     # 只出 PDF、不调模型（不花钱，适合先验证）
 ```
 
-**推荐用 systemd 用户服务常驻自启**（见下节）：
+不带第三方包时 PDF 会**降级**：没有页码、字体嵌入为 Type 3。想要完整排版（页码、书签、
+标准字体子集）就装上 WeasyPrint：
 
 ```bash
-systemctl --user enable --now arxiv-daily-report
+./install.sh                      # 建 .venv + 装 WeasyPrint（自动多镜像回退）
+# ./install.sh --with-math        # 可选：同时装 MathJax，公式与 LaTeX 一致
+.venv/bin/python run.py daily     # 之后用 venv 里的 python 跑
+```
+
+### 安装包方式
+
+```bash
+sudo apt install ./arxiv-daily-report_<版本>-1_amd64.deb    # 或 dnf / pacman -U
+pip install --user weasyprint        # Debian/Fedora 需自己装（Arch 已随包）
+
+arxiv-daily-report serve             # 打开 Web 配置界面，填模型密钥
+arxiv-daily-report daily             # 生成昨天（北京时间）的日报
+```
+
+两种方式命令完全对应：源码方式把 `arxiv-daily-report` 换成 `python3 run.py` 即可。
+
+### 模型密钥
+
+任选一种：
+
+```bash
+export DEEPSEEK_API_KEY=sk-...       # 环境变量（优先级最高）
+```
+
+或在 Web 界面「大模型设置」里填写（存进 `secrets.json`，权限 600）。
+
+### 常驻自启
+
+```bash
+systemctl --user enable --now arxiv-daily-report     # 安装包方式，单元已随包安装
+# 源码方式：./packaging/systemd/install-service.sh
 journalctl --user -u arxiv-daily-report -f
 ```
 

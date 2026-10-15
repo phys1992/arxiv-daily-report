@@ -35,11 +35,59 @@ def get_ctx(args) -> tuple[Config, Store]:
     return cfg, store
 
 
+def print_welcome(cfg: Config, store: Store, *, prog: str = "arxiv-daily-report") -> None:
+    """不带子命令时打印用法与状态。
+
+    直接报 "the following arguments are required: cmd" 对使用者没有任何帮助，
+    这里先回答「我能做什么、界面怎么进」，再给当前状态。
+    """
+    from .server import token_required, web_url
+    from .status import render_status
+
+    print(f"{prog} — arXiv 论文日报")
+    print()
+    print("用法")
+    print(f"  {prog} serve          启动 Web 配置界面（推荐从这里开始）")
+    print(f"  {prog} daily          抓取并生成昨天的日报 PDF")
+    print(f"  {prog} monthly        生成上一个自然月的简报")
+    print(f"  {prog} daemon         常驻定时运行（同时提供配置界面）")
+    print(f"  {prog} status         查看运行状态")
+    print(f"  {prog} <命令> --help  查看某个命令的参数")
+    print()
+
+    if not cfg["web"].get("enabled", True):
+        print("配置界面已在配置中关闭（web.enabled=false）。")
+    else:
+        try:
+            url = web_url(cfg)
+        except Exception:  # noqa: BLE001
+            url = ""
+        if url:
+            print(f"配置界面：{url}")
+            if token_required(cfg):
+                print("  已开启令牌校验，请用上面这个完整地址访问。")
+            else:
+                print(f"  免令牌，直接在浏览器打开即可；还没启动就运行 `{prog} serve`。")
+
+    if not cfg.api_key(cfg["llm"].get("provider", "deepseek")):
+        print()
+        print(f"提示：还没配置模型密钥。启动配置界面（{prog} serve）后在「大模型设置」里填写，")
+        print("      或先设环境变量，例如 export DEEPSEEK_API_KEY=sk-...")
+
+    print()
+    print("当前状态")
+    print(render_status(cfg, store))
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="arxiv-daily-report", description="arXiv 论文日报系统")
+    ap = argparse.ArgumentParser(
+        prog="arxiv-daily-report",
+        description="arXiv 论文日报：抓取新增论文，用大模型生成 PDF 日报与月度简报。",
+        epilog="不带子命令时显示当前状态与用法。",
+    )
     ap.add_argument("-c", "--config", help="配置文件路径（默认 <项目根>/config.json）")
     ap.add_argument("-v", "--verbose", action="store_true")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=False, metavar="命令")
 
     p = sub.add_parser("collect", help="抓取论文入库（不生成报告）")
     p.add_argument("--day", help="目标报告日 YYYY-MM-DD（默认：昨天）")
@@ -69,6 +117,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     setup_logging(args.verbose)
     cfg, store = get_ctx(args)
+
+    if not args.cmd:
+        print_welcome(cfg, store, prog=ap.prog)
+        return 0
 
     if args.cmd == "collect":
         from arxiv_daily_report.collect import collect

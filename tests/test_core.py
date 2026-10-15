@@ -774,6 +774,44 @@ class WebEntryTest(HermeticTestCase):
             finally:
                 store.close()
 
+    def test_bare_invocation_prints_usage_not_an_error(self):
+        """python run.py 不带子命令时，应给出用法与界面地址，而不是 argparse 报错。"""
+        import contextlib
+        import io
+        from unittest import mock
+
+        from arxiv_daily_report.cli import main
+
+        with tempfile.TemporaryDirectory() as td:
+            env = {"ADR_HOME": td}
+            with mock.patch.dict(os.environ, env):
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = main([])
+                out = buf.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("用法", out)
+        self.assertIn("serve", out)
+        self.assertIn("配置界面", out)
+        self.assertIn("http://127.0.0.1:8765/", out)
+        # 不应再出现 argparse 的报错
+        self.assertNotIn("the following arguments are required", out)
+
+    def test_subcommands_still_work(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        from arxiv_daily_report.cli import main
+
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.dict(os.environ, {"ADR_HOME": td}):
+
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.assertEqual(main(["status"]), 0)
+                self.assertIn("运行状态", buf.getvalue())
+
     def test_hint_page_explains_how_to_get_token(self):
         """没设密码又没令牌时，返回的是说清办法的页面，而不是一个裸 403。"""
         import re as _re
