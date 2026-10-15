@@ -28,7 +28,7 @@
 | **公式排版** | MathJax 预渲染成 SVG（与 LaTeX 输出同一套 Computer Modern 字形），按公式哈希缓存 |
 | **论文清单** | 每篇给出作者、标题、arXiv 号与可点击链接（由代码从元数据生成，模型不参与）；不再单列参考文献表 |
 | **月度简报** | **每月 1 号**（北京时间）自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**不设字数上限**，力求准确的前提下简明扼要；**重要文献在对应日期后附 arXiv 号**（如（10月13日，arXiv:2610.17034）），号逐条核对确属该日，编造或张冠李戴的一律剔除 |
-| **Web 配置界面** | 模型/调度/路径/语言/分类订阅全部可视化配置，改完即时生效 |
+| **Web 配置界面** | 模型/调度/路径/语言/分类订阅全部可视化配置，改完即时生效；常驻服务也会一并提供，任何时候用 `arxiv-daily-report status` 取回访问地址 |
 | **多模型支持** | DeepSeek、Kimi(Moonshot)、OpenAI、Claude(Anthropic)，以及任意**本地 OpenAI 兼容服务** |
 | **systemd 用户服务** | `systemctl --user` 一键开机自启，**不需要 root**，也不会有权限问题 |
 | **三种安装包** | Debian/Ubuntu 的 `.deb`、Fedora/RHEL 的 `.rpm`、Arch/Manjaro 的 `.pkg.tar.zst`，由 GitHub Actions 打 tag 自动构建发布 |
@@ -145,6 +145,38 @@ export DEEPSEEK_API_KEY=sk-...
 ```bash
 systemctl --user enable --now arxiv-daily-report
 journalctl --user -u arxiv-daily-report -f
+```
+
+### 怎么打开 Web 配置界面
+
+界面监听 `http://127.0.0.1:8765`，但**只接受带令牌的地址**（防止同机其他程序读取你的模型密钥）。
+三种拿到地址的方式，任选其一：
+
+```bash
+# ① 最省事：status 直接打印当前可用地址
+arxiv-daily-report status
+#     配置界面        http://127.0.0.1:8765/?token=xxxxxxxx
+
+# ② 常驻服务在后台跑：从日志里找
+journalctl --user -u arxiv-daily-report | grep 在浏览器里打开
+
+# ③ 临时起一个前台实例（会自动打开浏览器，Ctrl-C 退出）
+arxiv-daily-report serve
+```
+
+令牌持久保存在 `secrets.json` 里，所以**任何进程算出的地址都一样**——服务在后台跑着，
+你随时用 `status` 就能取回那个链接。
+
+> 也可以给界面设个密码，之后直接打开 `http://127.0.0.1:8765` 用密码登录（不用带令牌）。
+> 在 `config.json` 里设 `web.password`，或在 Web 界面「界面设置」里填。
+> 不带令牌又没设密码时，页面会直接告诉你上面这三条命令，不会只抛一个 403。
+
+常用参数：
+
+```bash
+arxiv-daily-report serve --port 8766        # 换端口（8765 被占用时）
+arxiv-daily-report serve --no-open          # 不自动打开浏览器
+arxiv-daily-report daemon --no-web          # 常驻但不开界面
 ```
 
 产物（安装包方式在 `~/.local/share/arxiv-daily-report/reports/`，源码方式在项目内 `reports/`）：

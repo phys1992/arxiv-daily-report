@@ -633,6 +633,96 @@ SAMPLE_ARXIV_HTML = """<!doctype html><html><body><article class="ltx_document">
 </article></body></html>"""
 
 
+class WebEntryTest(HermeticTestCase):
+    """「怎么打开 Web 界面」这条链路：地址可复现、状态里能查到、没令牌时给提示。"""
+
+    def _cfg(self, td, **web):
+        conf = {"web": dict({"host": "127.0.0.1", "port": 8765, "enabled": True}, **web)}
+        return Config(path=Path(td) / "config.json", overrides=conf)
+
+    def test_web_url_contains_stable_token(self):
+        from arxiv_daily_report.server import web_url
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td)
+            url = web_url(cfg)
+            self.assertTrue(url.startswith("http://127.0.0.1:8765/?token="))
+            # 令牌持久化在 secrets.json，任何进程算出来都一样（常驻服务在后台也查得到）
+            again = web_url(Config(path=Path(td) / "config.json"))
+            self.assertEqual(url, again)
+            self.assertGreater(len(url.split("token=")[1]), 20)
+
+    def test_web_url_rewrites_wildcard_host(self):
+        from arxiv_daily_report.server import web_url
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td, host="0.0.0.0", password="x")
+            self.assertIn("http://127.0.0.1:8765/", web_url(cfg))
+
+    def test_status_shows_web_url(self):
+        """status 必须直接给出可点开的地址——这是用户最常问的问题。"""
+        from arxiv_daily_report.status import render_status
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td)
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                out = render_status(cfg, store)
+                self.assertIn("配置界面", out)
+                self.assertIn("token=", out)
+            finally:
+                store.close()
+
+    def test_status_says_when_web_disabled(self):
+        from arxiv_daily_report.status import render_status
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td, enabled=False)
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                out = render_status(cfg, store)
+                self.assertIn("关闭", out)
+                self.assertIn("web.enabled", out)
+            finally:
+                store.close()
+
+    def test_refuses_public_bind_without_password(self):
+        """对外监听又不设密码会暴露模型密钥，必须拒绝启动界面。"""
+        from arxiv_daily_report.server import make_server
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(td, host="0.0.0.0", password="")
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                with self.assertRaises(SystemExit):
+                    make_server(cfg, store)
+            finally:
+                store.close()
+
+    def test_hint_page_explains_how_to_get_token(self):
+        """没设密码又没令牌时，返回的是说清办法的页面，而不是一个裸 403。"""
+        import re as _re
+
+        from arxiv_daily_report.server import Handler
+
+        self.assertTrue(hasattr(Handler, "_serve_hint"))
+        src = Path(__import__("arxiv_daily_report.server", fromlist=["x"]).__file__).read_text(
+            encoding="utf-8")
+        self.assertIn("arxiv-daily-report status", src)
+        self.assertIn("journalctl", src)
+
+    def test_daemon_serves_web_by_default(self):
+        """常驻服务默认同时提供配置界面，否则 systemd 方式下就没有界面可用。"""
+        import inspect
+
+        from arxiv_daily_report import scheduler
+
+        sig = inspect.signature(scheduler.run_daemon)
+        self.assertEqual(sig.parameters["with_web"].default, True)
+        src = inspect.getsource(scheduler.run_daemon)
+        self.assertIn("start_web_thread", src)
+
+
 class FullTextTest(HermeticTestCase):
     """全文提取：摘要、结论类小节、公式还原、参考文献区排除。"""
 

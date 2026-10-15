@@ -209,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self._password():
                     self._serve_login()
                 else:
-                    self.send_error(403, "需要访问令牌：请使用启动时打印的带 ?token=... 的地址")
+                    self._serve_hint()
                 return
             self._static("index.html")
             return
@@ -243,6 +243,41 @@ class Handler(BaseHTTPRequestHandler):
     # -- 口令鉴权 ----------------------------------------------------------
     def _password(self) -> str:
         return (self.cfg["web"].get("password") or "").strip()
+
+    def _serve_hint(self) -> None:
+        """没设密码又没带令牌时的提示页。
+
+        常驻服务（systemd）在后台跑，用户看不到启动时打印的地址，
+        所以这里必须说清楚怎么把那个地址找出来，而不是甩一个 403。
+        """
+        body = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>需要访问令牌</title><style>
+body{font-family:system-ui,sans-serif;max-width:40rem;margin:12vh auto;padding:0 1.2rem;
+     color:#1c2430;line-height:1.75}
+h1{font-size:1.35rem}
+code,pre{background:#f2f5f9;border-radius:6px;font-size:.92rem}
+code{padding:.12rem .35rem}
+pre{padding:.7rem .9rem;overflow-x:auto}
+li{margin:.35rem 0}
+</style></head><body>
+<h1>需要访问令牌</h1>
+<p>配置界面只接受带令牌的地址（防止同机其他程序改动你的模型密钥）。任选一种方式取得：</p>
+<ol>
+  <li>命令行直接打印当前地址：<pre>arxiv-daily-report status</pre></li>
+  <li>看常驻服务的日志（systemd 用户服务）：<pre>journalctl --user -u arxiv-daily-report | grep 在浏览器里打开</pre></li>
+  <li>临时起一个前台实例：<pre>arxiv-daily-report serve</pre></li>
+</ol>
+<p>也可以给 Web 界面设一个密码，之后直接打开
+<code>http://127.0.0.1:%(port)s</code> 就能登录：</p>
+<pre>arxiv-daily-report serve   # 在「界面设置」里设置 web.password</pre>
+</body></html>""" % {"port": self.server.server_address[1]}
+        raw = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
 
     def _serve_login(self, error: str = "") -> None:
         """极简登录页（内联，不依赖静态资源）。"""
@@ -423,8 +458,22 @@ def _backends() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-def serve(cfg: Config, store: Store, *, host: str | None = None, port: int | None = None,
-          open_browser: bool = True) -> None:
+def web_url(cfg: Config, host: str | None = None, port: int | None = None) -> str:
+    """配置界面的完整地址（含访问令牌）。
+
+    令牌保存在 secrets.json 里，是持久化的，所以任何进程都能算出同一个地址——
+    常驻服务在后台跑时，用 `arxiv-daily-report status` 就能拿到它。
+    """
+    web = cfg["web"]
+    host = host or web.get("host", "127.0.0.1")
+    port = int(port or web.get("port", 8765))
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    return f"http://{shown}:{port}/?token={cfg.session_token()}"
+
+
+def make_server(cfg: Config, store: Store, host: str | None = None,
+                port: int | None = None) -> tuple[ThreadingHTTPServer, str]:
+    """创建（但不启动）HTTP 服务。返回 (httpd, url)。"""
     web = cfg["web"]
     host = host or web.get("host", "127.0.0.1")
     port = int(port or web.get("port", 8765))
@@ -433,19 +482,54 @@ def serve(cfg: Config, store: Store, *, host: str | None = None, port: int | Non
             "拒绝启动：绑定非回环地址时必须先在配置里设置 web.password，"
             "否则同网段任何人都能改动你的模型密钥。"
         )
-    token = cfg.session_token()
-
     Handler.cfg = cfg
     Handler.store = store
-    Handler.token = token
-
+    Handler.token = cfg.session_token()
     httpd = ThreadingHTTPServer((host, port), Handler)
-    url = f"http://{host}:{port}/?token={token}"
-    print("=" * 68)
-    print("  arxiv-daily-report 配置界面已启动")
-    print(f"  地址：{url}")
-    print("  （令牌已写入 URL，仅本进程有效；请勿分享该链接）")
-    print("=" * 68)
+    return httpd, web_url(cfg, host, port)
+
+
+def announce(url: str, *, stream=print) -> None:
+    """把访问方式清楚地印出来（前台命令与 systemd 日志共用）。"""
+    stream("=" * 68)
+    stream("  arxiv-daily-report 配置界面")
+    stream(f"  在浏览器里打开：{url}")
+    stream("  令牌已写入该地址，不设密码时只能用它访问（请勿分享）。")
+    stream("  随时可用 `arxiv-daily-report status` 重新查看这个地址。")
+    stream("=" * 68)
+
+
+def start_web_thread(cfg: Config, store: Store, host: str | None = None,
+                     port: int | None = None):
+    """在后台线程里提供配置界面，供 daemon 使用。返回 (httpd 或 None)。"""
+    import threading
+
+    try:
+        httpd, url = make_server(cfg, store, host, port)
+    except SystemExit:
+        raise
+    except OSError as exc:
+        log.warning("配置界面未启动（%s）。想改配置就直接编辑 %s，"
+                    "或先停掉占用 %s:%s 的进程。",
+                    exc, cfg.path, cfg["web"].get("host"), cfg["web"].get("port"))
+        return None
+    t = threading.Thread(target=httpd.serve_forever, name="adr-web", daemon=True)
+    t.start()
+    announce(url, stream=lambda m: log.info("%s", m))
+    return httpd
+
+
+def serve(cfg: Config, store: Store, *, host: str | None = None, port: int | None = None,
+          open_browser: bool = True) -> None:
+    try:
+        httpd, url = make_server(cfg, store, host, port)
+    except OSError as exc:
+        raise SystemExit(
+            f"端口被占用，无法启动配置界面：{exc}\n"
+            f"  可能已经有一个实例在运行；先执行 `arxiv-daily-report status` 查看地址，\n"
+            f"  或用 `--port 8766` 换一个端口。"
+        ) from exc
+    announce(url)
     if open_browser:
         try:
             webbrowser.open(url)

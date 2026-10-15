@@ -197,7 +197,9 @@
     "fulltext.enabled_hint": "抓取 arXiv HTML，读「结论/讨论」小节后与摘要一起交给模型。关掉则只用摘要。",
     "fulltext.max_chars": "每篇结论原文上限（字符）",
     "fulltext.max_chars_hint": "只影响送入模型的结论段长度，不影响抓取。",
-    "fulltext.source": "全文来源"
+    "fulltext.source": "全文来源",
+    "web.enabled": "常驻时提供配置界面",
+    "web.enabled_hint": "常驻服务（daemon）在后台同时提供配置界面。关闭后只能用命令行改配置。访问地址可用 `arxiv-daily-report status` 查看。"
   },
   "en": {
     "app.title": "arXiv Daily Report Settings",
@@ -397,6 +399,8 @@
     "fulltext.enabled_hint": "Fetch arXiv HTML, read the Conclusion/Discussion section and give it to the model together with the abstract. Off = abstract only.",
     "fulltext.max_chars": "Conclusion text per paper (chars)",
     "fulltext.max_chars_hint": "Only limits how much of the conclusion is sent to the model.",
-    "fulltext.source": "Full-text source"
+    "fulltext.source": "Full-text source",
+    "web.enabled": "Serve the config UI while running as a daemon",
+    "web.enabled_hint": "The daemon also serves the web UI in the background. If disabled, edit the config by hand. Run `arxiv-daily-report status` to get the URL."
   }
 }

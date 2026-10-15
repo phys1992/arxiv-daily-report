@@ -199,6 +199,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     # ---- Web 界面 ----
     "web": {
+        "enabled": True,               # daemon 常驻时是否同时提供 Web 配置界面
         "host": "127.0.0.1",
         "port": 8765,
         "password": "",                # 绑非回环地址时必填

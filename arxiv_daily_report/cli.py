@@ -62,7 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int)
     p.add_argument("--no-open", action="store_true")
 
-    sub.add_parser("daemon", help="常驻运行：定时抓取并生成报告")
+    pd = sub.add_parser("daemon", help="常驻运行：定时抓取并生成报告（同时提供 Web 配置界面）")
+    pd.add_argument("--no-web", action="store_true", help="不提供 Web 配置界面")
     sub.add_parser("status", help="显示运行状态")
 
     args = ap.parse_args(argv)
@@ -112,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "daemon":
         from arxiv_daily_report.scheduler import run_daemon
 
-        run_daemon(cfg, store)
+        run_daemon(cfg, store, with_web=not getattr(args, "no_web", False))
         return 0
 
     if args.cmd == "status":

@@ -87,6 +87,23 @@ def next_run_time(cfg: Config) -> str:
         return sched.get("time", "")
 
 
+def _web_hint(cfg: Config) -> str:
+    """把「怎么打开 Web 界面」直接写在状态里，省得去翻日志。"""
+    from .server import web_url
+
+    host = cfg["web"].get("host", "127.0.0.1")
+    port = int(cfg["web"].get("port", 8765))
+    if not cfg["web"].get("enabled", True):
+        return "已在配置中关闭（web.enabled=false）"
+    try:
+        url = web_url(cfg, host, port)
+    except Exception:  # noqa: BLE001
+        return f"http://{host}:{port}/（令牌读取失败）"
+    if host in ("0.0.0.0", "::"):
+        return url + "  ← 注意：正在对外监听，端口 " + str(port)
+    return url
+
+
 def render_status(cfg: Config, store: Store) -> str:
     s = status_dict(cfg, store)
     lines = [
@@ -99,6 +116,7 @@ def render_status(cfg: Config, store: Store) -> str:
         f"  报告目录        {s['paths']['reports']}",
         f"  发布目录        {s['paths']['publish'] or '（未设置）'}",
         f"  PDF 后端        {', '.join(s['pdf_backends']) or '（无！请安装 WeasyPrint）'}",
+        f"  配置界面        {_web_hint(cfg)}",
         "",
         f"  订阅分类        {s['category_count']} 个：{', '.join(s['categories'])}",
         f"  目标报告日      {s['target_day']}",

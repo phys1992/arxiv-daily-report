@@ -53,8 +53,16 @@ def run_once(cfg: Config, store: Store, *, day: str | None = None) -> None:
             run_monthly(cfg, store, month=month)
 
 
-def run_daemon(cfg: Config, store: Store) -> None:
-    """常驻循环。启动时先补跑一次（幂等），之后按配置时刻触发。"""
+def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
+    """常驻循环。启动时先补跑一次（幂等），之后按配置时刻触发。
+
+    同时（默认）在后台线程里提供 Web 配置界面——systemd 用户服务跑的就是它，
+    否则用服务方式常驻时就没有界面可用了。
+    """
+    if with_web and cfg["web"].get("enabled", True):
+        from .server import start_web_thread
+
+        start_web_thread(cfg, store)
     sched = cfg["schedule"]
     if sched.get("mode") == "manual":
         log.warning("调度模式为 manual：常驻进程不会自动运行，请通过 Web 界面或 CLI 手动触发")
