@@ -176,7 +176,7 @@ export DEEPSEEK_API_KEY=sk-...       # 环境变量（优先级最高）
 
 ```bash
 systemctl --user enable --now arxiv-daily-report     # 安装包方式，单元已随包安装
-# 源码方式：./packaging/systemd/install-service.sh
+# 源码方式：./systemd/install-service.sh
 journalctl --user -u arxiv-daily-report -f
 ```
 
@@ -280,8 +280,8 @@ sudo loginctl enable-linger "$USER"
 ### 源码方式
 
 ```bash
-./packaging/systemd/install-service.sh              # 自动生成并启用单元
-./packaging/systemd/install-service.sh --uninstall  # 卸载
+./systemd/install-service.sh              # 自动生成并启用单元
+./systemd/install-service.sh --uninstall  # 卸载
 ```
 
 定时（默认每天 19:00，`Asia/Shanghai`）由**进程内部的调度器**完成，systemd 只负责把进程拉起来并保活。
@@ -474,11 +474,15 @@ arxiv-daily-report/
 ├── web/                    纯静态配置界面
 ├── data/                   arXiv 分类表、主题表（随程序分发）
 ├── assets/mathjax/         MathJax 预渲染脚本（可选依赖）
+├── systemd/                systemd 用户服务（systemctl --user，不需要 root）
+│   ├── arxiv-daily-report.service       发行版包用，装到 /usr/lib/systemd/user/
+│   ├── arxiv-daily-report.service.tmpl  源码方式用，路径由下面脚本填充
+│   ├── install-service.sh               源码方式一键安装并启用
+│   └── README.md                        两种用法与常用命令
 ├── packaging/
 │   ├── nfpm.yaml.tmpl      deb/rpm/pkg.tar.zst 打包模板
 │   ├── build-packages.sh   构建三种安装包
-│   ├── launcher.py         安装包里的 /usr/bin 入口
-│   └── systemd/            用户级服务单元与安装脚本
+│   └── launcher.py         安装包里的 /usr/bin 入口
 ├── .github/workflows/      ci.yml（测试+打包校验）、release.yml（发布）、daily.yml（云端生成）
 ├── Dockerfile
 └── reports/                产出的 PDF（已 gitignore）

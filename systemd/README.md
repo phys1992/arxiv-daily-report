@@ -22,8 +22,8 @@ systemctl --user enable --now arxiv-daily-report
 **源码检出**：用下面的脚本生成本机路径的单元：
 
 ```bash
-packaging/systemd/install-service.sh          # 安装并启动
-packaging/systemd/install-service.sh --uninstall
+systemd/install-service.sh          # 安装并启动
+systemd/install-service.sh --uninstall
 ```
 
 它会：

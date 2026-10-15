@@ -133,7 +133,7 @@ cat <<EOF
   3) 打开配置界面
        .venv/bin/python run.py serve
   4) 开机自启（推荐用户级服务：不需要 root，也不会有权限问题）
-       ./packaging/systemd/install-service.sh
+       ./systemd/install-service.sh
      之后用 systemctl --user status arxiv-daily-report 查看，日志用
        journalctl --user -u arxiv-daily-report -f
      （不要用 sudo systemctl enable：程序需要读写你自己的 ~/.config 与

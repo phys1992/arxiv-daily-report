@@ -8,7 +8,8 @@
 #       因此这里只需要一个常驻服务，不需要 timer 单元。
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# 本脚本位于 <项目根>/systemd/，所以往上一级就是项目根
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_NAME="arxiv-daily-report.service"
 
@@ -29,12 +30,14 @@ VENV_PY="$PROJECT_DIR/.venv/bin/python"
 [[ -x "$VENV_PY" ]] || die "未找到 .venv，请先执行 ./install.sh"
 
 say "写入 $UNIT_DIR/$UNIT_NAME"
-if ! sed -e "s#@PROJECT_DIR@#$PROJECT_DIR#g" -e "s#@VENV_PY@#$VENV_PY#g" \
-        "$PROJECT_DIR/packaging/systemd/arxiv-daily-report.service.tmpl" > "$UNIT_DIR/$UNIT_NAME" 2>/dev/null; then
+# 先写临时文件再移动：重定向失败时 bash 自己会往 stderr 甩一行 errno，
+# 这里连同它一起压掉，只留下面这条可操作的提示。
+if ! { sed -e "s#@PROJECT_DIR@#$PROJECT_DIR#g" -e "s#@VENV_PY@#$VENV_PY#g" \
+        "$PROJECT_DIR/systemd/arxiv-daily-report.service.tmpl" > "$UNIT_DIR/$UNIT_NAME"; } 2>/dev/null; then
   die "写入失败：$UNIT_DIR 不可写。
   常见原因：当前处在容器/沙箱里（文件系统只读），或该目录权限受限。
   请在正常的桌面终端里重新执行：
-    $PROJECT_DIR/packaging/systemd/install-service.sh"
+    $PROJECT_DIR/systemd/install-service.sh"
 fi
 
 if ! systemctl --user daemon-reload 2>/dev/null; then
