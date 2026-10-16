@@ -68,12 +68,71 @@ def config_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """数据目录（库、报告、原始 XML）：…/data 或 ~/.local/share/arxiv-daily-report"""
-    return _resolve_dir("ADR_DATA_HOME", "XDG_DATA_HOME", ".local/share", "data")
+    """状态目录（数据库等需要持久化的运行状态）：…/data 或 ~/.local/state/arxiv-daily-report。
+
+    按 XDG 规范，这类「重启要保留、但又不属于用户数据」的内容属于 STATE：
+    删掉它不会丢最终报告，但会丢掉去重记录与月报所需的日报摘要，
+    因此**不放在 cache 里**（cache 是用户随时可以清的）。
+    """
+    import os as _os
+    if portable_root() is not None:
+        return _resolve_dir("ADR_DATA_HOME", "XDG_STATE_HOME", ".local/state", "data")
+    # 安装形态：XDG_STATE_HOME；兼容早期装在 XDG_DATA_HOME 的旧库
+    v = _os.environ.get("ADR_DATA_HOME", "").strip()
+    if v:
+        return Path(v).expanduser().resolve()
+    state = _xdg("XDG_STATE_HOME", ".local/state")
+    old = _xdg("XDG_DATA_HOME", ".local/share")
+    if (old / "state.sqlite3").exists() and not (state / "state.sqlite3").exists():
+        return old                      # 已有旧库就继续用它，不制造迁移
+    return state
+
+
+def documents_dir() -> Path:
+    """最终报告的默认位置：用户的「文档」目录下的一个子文件夹。
+
+    安装包形态下用户只需要知道报告在哪；过程中产生的数据都在 cache/state 里。
+    顺序：XDG_DOCUMENTS_DIR 环境变量 -> xdg-user-dir DOCUMENTS
+          -> ~/.config/user-dirs.dirs -> ~/Documents
+    """
+    import os as _os
+    import shutil as _shutil
+    import subprocess as _sp
+
+    base: Path | None = None
+    env = _os.environ.get("XDG_DOCUMENTS_DIR", "").strip()
+    if env:
+        base = Path(env.replace("$HOME", str(Path.home()))).expanduser()
+    if base is None and _shutil.which("xdg-user-dir"):
+        try:
+            out = _sp.run(["xdg-user-dir", "DOCUMENTS"], capture_output=True,
+                          text=True, timeout=10).stdout.strip()
+            if out and Path(out).is_absolute():
+                base = Path(out)
+        except Exception:  # noqa: BLE001
+            base = None
+    if base is None:
+        cfgfile = Path.home() / ".config" / "user-dirs.dirs"
+        try:
+            for line in cfgfile.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("XDG_DOCUMENTS_DIR"):
+                    raw = line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(Path.home()))
+                    if raw:
+                        base = Path(raw)
+                    break
+        except Exception:  # noqa: BLE001
+            base = None
+    if base is None or not base.is_absolute():
+        base = Path.home() / "Documents"
+    return (base / APP_NAME).resolve()
 
 
 def cache_dir() -> Path:
-    """缓存目录（可安全删除）：…/cache 或 ~/.cache/arxiv-daily-report"""
+    """缓存目录（用户随时可以删）：…/cache 或 ~/.cache/arxiv-daily-report。
+
+    只放可再生的中间数据（arXiv 原始 XML、公式缓存、全文摘录），
+    定期清理也只动这里，清掉不影响最终报告。
+    """
     return _resolve_dir("ADR_CACHE_HOME", "XDG_CACHE_HOME", ".cache", "cache")
 
 
@@ -175,6 +234,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "save_keys": True,             # False = 只从环境变量读取密钥
     },
     # ---- 报告内容 ----
+    # ---- 缓存清理 ----
+    # 只清理可再生的中间数据（arXiv 原始 XML、公式 SVG、全文摘录），
+    # 不会动最终报告，也不会动去重记录与日报摘要。
+    "cache": {
+        "cleanup": "3m",               # 1d | 3d | 1w | 1m | 3m | 6m | never
+    },
     # ---- 全文（读取论文结论/讨论小节）----
     "fulltext": {
         "enabled": True,               # 日报摘要是否结合论文全文的结论/讨论部分
@@ -283,7 +348,7 @@ class Config:
     # -- 载入 / 保存 --------------------------------------------------------
     def ensure_home(self) -> None:
         """确保配置/数据/缓存三个目录存在且可写，给出可操作的报错。"""
-        for label, d in (("配置", self.config_home), ("数据", self.state_home),
+        for label, d in (("配置", self.config_home), ("状态", self.state_home),
                          ("缓存", self.cache_home)):
             try:
                 d.mkdir(parents=True, exist_ok=True)
@@ -347,14 +412,28 @@ class Config:
 
     @property
     def reports_dir(self) -> Path:
-        """报告输出目录。paths.reports 留空时：
-        便携模式 <root>/reports；安装模式 <数据目录>/reports。"""
+        """最终报告的存放目录。
+
+        paths.reports 留空时：
+          便携模式 -> <root>/reports（整个目录拷走就能用）
+          安装模式 -> ~/Documents/arxiv-daily-report（用户一眼能找到）
+        设置了 paths.reports 就完全按用户指定的来。
+        """
         v = (self._data["paths"].get("reports") or "").strip()
         if v:
             return self.resolve(v)
         if self.portable is not None:
             return (self.portable / "reports").resolve()
-        return (self.state_home / "reports").resolve()
+        return documents_dir()
+
+    @property
+    def raw_cache_dir(self) -> Path:
+        """arXiv 原始响应的落盘位置（纯缓存，可随时清）。
+
+        注意要用 cache_dir **属性**（会读 paths.cache 覆盖），
+        而不是 cache_home（只反映 XDG/便携的默认位置）。
+        """
+        return self.cache_dir / "raw"
 
     @property
     def data_dir(self) -> Path:

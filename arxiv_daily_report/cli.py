@@ -113,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     pd = sub.add_parser("daemon", help="常驻运行：定时抓取并生成报告（同时提供 Web 配置界面）")
     pd.add_argument("--no-web", action="store_true", help="不提供 Web 配置界面")
     sub.add_parser("status", help="显示运行状态")
+    pc = sub.add_parser("cleanup", help="清理缓存（可再生的中间数据）")
+    pc.add_argument("--dry-run", action="store_true", help="只显示会清理什么，不真的删")
 
     args = ap.parse_args(argv)
     setup_logging(args.verbose)
@@ -166,6 +168,23 @@ def main(argv: list[str] | None = None) -> int:
         from arxiv_daily_report.scheduler import run_daemon
 
         run_daemon(cfg, store, with_web=not getattr(args, "no_web", False))
+        return 0
+
+    if args.cmd == "cleanup":
+        from arxiv_daily_report.cleanup import cache_usage, cleanup_cache, interval_days
+
+        before = cache_usage(cfg, store)
+        print(f"缓存目录：{cfg.cache_home}")
+        print(f"  当前：原始 XML {before['raw_files']} 个、公式 {before['math_rows']} 条、"
+              f"全文 {before['fulltext_rows']} 条")
+        days = interval_days(cfg.get("cache", {}).get("cleanup"))
+        if args.dry_run:
+            print(f"  保留周期：{days} 天（--dry-run，未做任何删除）" if days else "  已设置为不清理")
+            return 0
+        cleanup_cache(cfg, store, progress=print)
+        after = cache_usage(cfg, store)
+        print(f"  清理后：原始 XML {after['raw_files']} 个、公式 {after['math_rows']} 条、"
+              f"全文 {after['fulltext_rows']} 条")
         return 0
 
     if args.cmd == "status":

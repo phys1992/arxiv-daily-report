@@ -313,6 +313,19 @@
               <input type="text" data-path="paths.publish_dir" spellcheck="false" autocomplete="off">
               <small class="hint" data-i18n="paths.publish_hint"></small>
             </label>
+            <label class="field">
+              <span class="label" data-i18n="cache.cleanup"></span>
+              <select data-path="cache.cleanup">
+                <option value="1d" data-i18n="cache.opt.1d"></option>
+                <option value="3d" data-i18n="cache.opt.3d"></option>
+                <option value="1w" data-i18n="cache.opt.1w"></option>
+                <option value="1m" data-i18n="cache.opt.1m"></option>
+                <option value="3m" data-i18n="cache.opt.3m"></option>
+                <option value="6m" data-i18n="cache.opt.6m"></option>
+                <option value="never" data-i18n="cache.opt.never"></option>
+              </select>
+              <small class="hint" data-i18n="cache.cleanup_hint"></small>
+            </label>
           </div>
           <div class="card-body">
             <div class="label" data-i18n="paths.resolved"></div>

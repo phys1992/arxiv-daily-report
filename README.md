@@ -372,10 +372,40 @@ arxiv-daily-report status                                           # 运行状�
 
 | | 源码检出 / `ADR_HOME` 便携模式 | 安装包方式（XDG） |
 |---|---|---|
+| **最终报告** | `<项目根>/reports/` | **`~/Documents/arxiv-daily-report/`** |
 | 配置与密钥 | `<项目根>/config.json`、`secrets.json` | `~/.config/arxiv-daily-report/` |
-| 数据库、原始 XML、报告 | `<项目根>/data/`、`<项目根>/reports/` | `~/.local/share/arxiv-daily-report/` |
-| 缓存（可随时删） | `<项目根>/cache/` | `~/.cache/arxiv-daily-report/` |
+| 状态（数据库） | `<项目根>/data/` | `~/.local/state/arxiv-daily-report/` |
+| 缓存（可随时清） | `<项目根>/cache/` | `~/.cache/arxiv-daily-report/` |
 | 随程序分发的资产 | `<项目根>/data/`、`assets/` | `/usr/share/arxiv-daily-report/` |
+
+**安装包方式下你只需要记住一件事：报告在 `~/Documents/arxiv-daily-report/`。**
+其余都是程序自己管理的标准位置，不用管。想换地方就设 `paths.reports`
+（Web 界面「存储与路径 → 报告目录」），中间数据的位置不需要你选。
+
+它遵守 XDG 规范：配置进 `XDG_CONFIG_HOME`、状态进 `XDG_STATE_HOME`、
+缓存进 `XDG_CACHE_HOME`，最终产物进用户的「文档」目录
+（用 `xdg-user-dir DOCUMENTS` 解析，中文系统会落到 `~/文档`）。
+
+#### 缓存清理
+
+中间数据（arXiv 原始响应、公式 SVG、论文全文摘录）会随时间累积——
+原始响应约 1–2 MB/天，一年下来几百 MB。程序会**定期自动清理**：
+
+```bash
+arxiv-daily-report cleanup --dry-run    # 先看看会清什么
+arxiv-daily-report cleanup              # 直接清理
+```
+
+默认保留 **3 个月**，在 Web 界面「存储与路径 → 缓存清理周期」可选：
+
+| 选项 | `cache.cleanup` |
+|---|---|
+| 每天 / 每 3 天 / 每周 | `1d` / `3d` / `1w` |
+| 每月 / **每 3 个月（默认）** / 每半年 | `1m` / `3m` / `6m` |
+| 不清理 | `never` |
+
+清理**只动缓存**：最终报告、去重记录、日报摘要（月报要用）、用量账本都不会被碰。
+常驻服务每次启动时会自动清一次，`status` 里能看到当前占用与周期。
 
 用 `arxiv-daily-report status` 可以看到本机实际使用的路径。关键配置项：
 
@@ -397,6 +427,9 @@ arxiv-daily-report status                                           # 运行状�
     "provider": "deepseek",             // deepseek | moonshot | openai | anthropic | custom
     "model": "deepseek-flash",
     "disable_thinking": true            // 结构化摘要关闭思考模式，避免推理 token 挤占输出
+  },
+  "cache": {
+    "cleanup": "3m"                     // 1d | 3d | 1w | 1m | 3m | 6m | never
   },
   "fulltext": {
     "enabled": true,                    // 日报摘要是否结合全文的结论/讨论部分

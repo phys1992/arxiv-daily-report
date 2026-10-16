@@ -92,7 +92,7 @@ def collect(
     fetch = cfg["fetch"]
     raw_dir = None
     if cfg["report"].get("keep_raw_xml", True):
-        raw_dir = cfg.data_dir / "raw" / day
+        raw_dir = cfg.raw_cache_dir / day
     client = client or ArxivClient(
         interval_sec=fetch.get("request_interval_sec", 3.0),
         timeout_sec=fetch.get("timeout_sec", 60),

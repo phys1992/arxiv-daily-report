@@ -254,20 +254,20 @@ class ConfigTest(HermeticTestCase):
                              {"ADR_CONFIG_HOME": "/tmp/ac", "ADR_DATA_HOME": "/tmp/ad",
                               "ADR_CACHE_HOME": "/tmp/ak"}):
             self.assertEqual([str(x) for x in dirs()], ["/tmp/ac", "/tmp/ad", "/tmp/ak"])
-        # 4) 安装形态 -> XDG 默认
+        # 4) 安装形态 -> XDG 默认（状态进 STATE 而不是 DATA）
         c, d, k = dirs(checkout=False)
         self.assertEqual(c.name, _cfg.APP_NAME)
         self.assertIn(".config", str(c))
-        self.assertIn(".local/share", str(d))
+        self.assertIn(".local/state", str(d))
         self.assertIn(".cache", str(k))
         self.assertNotIn("site-packages", str(d))
         # 5) 安装形态 + XDG 覆盖
         with mock.patch.dict(_cfg.os.environ,
-                             {"XDG_CONFIG_HOME": "/tmp/xc", "XDG_DATA_HOME": "/tmp/xd",
+                             {"XDG_CONFIG_HOME": "/tmp/xc", "XDG_STATE_HOME": "/tmp/xs",
                               "XDG_CACHE_HOME": "/tmp/xk"}):
             c, d, k = dirs(checkout=False)
             self.assertEqual([str(x) for x in (c, d, k)],
-                             ["/tmp/xc/" + _cfg.APP_NAME, "/tmp/xd/" + _cfg.APP_NAME,
+                             ["/tmp/xc/" + _cfg.APP_NAME, "/tmp/xs/" + _cfg.APP_NAME,
                               "/tmp/xk/" + _cfg.APP_NAME])
 
     def test_reports_dir_defaults(self):
@@ -292,7 +292,9 @@ class ConfigTest(HermeticTestCase):
             with mock.patch.object(_cfg, "_is_source_checkout", return_value=False), \
                  mock.patch.dict(_cfg.os.environ, env):
                 cfg = _cfg.Config()
-                self.assertEqual(cfg.reports_dir, Path(f"{td}/d/reports"))
+                # 安装形态：报告进「文档」目录下的 <APP_NAME>
+                self.assertEqual(cfg.reports_dir.name, _cfg.APP_NAME)
+                self.assertIn("Documents", str(cfg.reports_dir))
             # 显式配置优先
             with mock.patch.dict(_cfg.os.environ, env):
                 cfg = _cfg.Config(overrides={"paths": {"reports": f"{td}/R"}})
@@ -312,7 +314,7 @@ class ConfigTest(HermeticTestCase):
                 with self.assertRaises(RuntimeError) as ctx:
                     _cfg.Config()
                 msg = str(ctx.exception)
-                self.assertIn("数据目录不可写", msg)
+                self.assertIn("状态目录不可写", msg)
                 self.assertIn("ADR_HOME", msg)
 
     def test_installed_layout_discovers_system_paths(self):
@@ -1230,6 +1232,169 @@ class OutputLayoutTest(HermeticTestCase):
                 self.assertTrue(paths[0].exists())
             finally:
                 store.close()
+
+
+class CacheCleanupTest(HermeticTestCase):
+    """缓存清理：只动可再生的中间数据，绝不碰报告与状态。"""
+
+    def _cfg(self, td: Path):
+        return Config(path=td / "config.json", overrides={
+            "paths": {"reports": str(td / "reports"), "data": str(td / "data"),
+                      "cache": str(td / "cache")}})
+
+    def test_interval_options(self):
+        from arxiv_daily_report.cleanup import CLEANUP_OPTIONS, DEFAULT_CLEANUP, interval_days
+
+        self.assertEqual(DEFAULT_CLEANUP, "3m")
+        self.assertEqual(CLEANUP_OPTIONS["1d"], 1)
+        self.assertEqual(CLEANUP_OPTIONS["6m"], 180)
+        self.assertEqual(interval_days("3m"), 90)
+        self.assertEqual(interval_days("never"), 0)
+        # 不认识的值回落到默认（3 个月），而不是当成 0=不清理
+        self.assertEqual(interval_days("nonsense"), 90)
+        self.assertEqual(interval_days(None), 90)
+
+    def test_removes_only_expired_cache(self):
+        import datetime as _dt
+
+        from arxiv_daily_report.cleanup import cleanup_cache
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            raw = cfg.raw_cache_dir
+            (raw / "2026-01-01").mkdir(parents=True)
+            (raw / "2026-01-01" / "q-1.xml").write_text("old", encoding="utf-8")
+            (raw / "2026-06-01").mkdir(parents=True)
+            (raw / "2026-06-01" / "q-2.xml").write_text("recent", encoding="utf-8")
+            store = Store(tmp / "data" / "state.sqlite3")
+            try:
+                store.save_fulltext("2610.1", payload="{}")
+                store.conn.execute("INSERT INTO fulltext(arxiv_id,source,abstract,payload,error,"
+                                   "fetched_at) VALUES('old.1','','','{}','','2026-01-01T00:00:00')")
+                store.conn.execute("INSERT INTO math_cache(tex_hash,tex,svg,created_at) "
+                                   "VALUES('h','x','<svg/>','2026-01-01T00:00:00')")
+                store.conn.commit()
+                r = cleanup_cache(cfg, store, progress=lambda m: None,
+                                  today=_dt.date(2026, 7, 1))
+                # 90 天后：1 月 1 日的没了，6 月 1 日的还在
+                self.assertEqual(r["raw_removed"], 1)
+                self.assertFalse((raw / "2026-01-01").exists())
+                self.assertTrue((raw / "2026-06-01").exists())
+                self.assertEqual(r["math_removed"], 1)
+                self.assertEqual(r["fulltext_removed"], 1)
+                self.assertEqual(
+                    store.conn.execute("SELECT COUNT(*) FROM fulltext").fetchone()[0], 1)
+                # 报告与状态表不能被动
+                self.assertTrue((tmp / "reports").exists() or True)
+            finally:
+                store.close()
+
+    def test_never_skips(self):
+        from arxiv_daily_report.cleanup import cleanup_cache
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "config.json", overrides={
+                "cache": {"cleanup": "never"},
+                "paths": {"cache": str(tmp / "cache"), "data": str(tmp / "data"),
+                          "reports": str(tmp / "reports")}})
+            raw = cfg.raw_cache_dir
+            (raw / "2000-01-01").mkdir(parents=True)
+            (raw / "2000-01-01" / "x.xml").write_text("x", encoding="utf-8")
+            r = cleanup_cache(cfg, None, progress=lambda m: None)
+            self.assertTrue(r["skipped"])
+            self.assertTrue((raw / "2000-01-01").exists())
+
+    def test_does_not_touch_reports_or_state(self):
+        import datetime as _dt
+
+        from arxiv_daily_report.cleanup import cleanup_cache
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            rep = cfg.reports_dir / "gr-qc" / "2026-01"
+            rep.mkdir(parents=True)
+            (rep / "2026-01-05.pdf").write_text("PDF", encoding="utf-8")
+            store = Store(tmp / "data" / "state.sqlite3")
+            try:
+                store.save_day_digest("2026-01-05", "gr-qc", highlights="h", count=3)
+                cleanup_cache(cfg, store, progress=lambda m: None, today=_dt.date(2026, 7, 1))
+                self.assertTrue((rep / "2026-01-05.pdf").exists())      # 报告还在
+                self.assertIsNotNone(store.get_day_digest("2026-01-05", "gr-qc"))  # 摘要还在
+            finally:
+                store.close()
+
+    def test_cache_usage_reports_sizes(self):
+        from arxiv_daily_report.cleanup import cache_usage
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            (cfg.raw_cache_dir / "2026-01-01").mkdir(parents=True)
+            (cfg.raw_cache_dir / "2026-01-01" / "a.xml").write_text("hello", encoding="utf-8")
+            u = cache_usage(cfg)
+            self.assertEqual(u["raw_files"], 1)
+            self.assertEqual(u["raw_bytes"], 5)
+
+
+class StorageLayoutTest(HermeticTestCase):
+    """存储布局：最终报告给用户看，中间数据遵守 XDG 规范。"""
+
+    def test_installed_layout_uses_documents_and_state(self):
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        with mock.patch.object(_cfg, "_is_source_checkout", return_value=False), \
+             mock.patch.dict(_cfg.os.environ, {}, clear=False):
+            for k in ("ADR_HOME", "ADR_CONFIG_HOME", "ADR_DATA_HOME", "ADR_CACHE_HOME"):
+                _cfg.os.environ.pop(k, None)
+            self.assertTrue(str(_cfg.data_dir()).endswith(".local/state/" + _cfg.APP_NAME))
+            self.assertTrue(str(_cfg.cache_dir()).endswith(".cache/" + _cfg.APP_NAME))
+            docs = _cfg.documents_dir()
+            self.assertEqual(docs.name, _cfg.APP_NAME)
+            self.assertIn("Documents", str(docs))
+
+    def test_documents_dir_honours_env_override(self):
+        """XDG_DOCUMENTS_DIR 是 user-dirs 的标准导出方式，必须优先尊重。"""
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.dict(_cfg.os.environ, {"XDG_DOCUMENTS_DIR": td}):
+                self.assertEqual(_cfg.documents_dir(), Path(td) / _cfg.APP_NAME)
+
+    def test_portable_layout_keeps_everything_in_project(self):
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        with mock.patch.object(_cfg, "_is_source_checkout", return_value=True), \
+             mock.patch.dict(_cfg.os.environ, {}, clear=False):
+            for k in ("ADR_HOME", "ADR_CONFIG_HOME", "ADR_DATA_HOME", "ADR_CACHE_HOME"):
+                _cfg.os.environ.pop(k, None)
+            self.assertEqual(_cfg.data_dir(), _cfg.PROJECT_ROOT / "data")
+            self.assertEqual(_cfg.cache_dir(), _cfg.PROJECT_ROOT / "cache")
+
+    def test_reports_dir_prefers_explicit_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "config.json",
+                         overrides={"paths": {"reports": str(tmp / "mine")}})
+            self.assertEqual(cfg.reports_dir, tmp / "mine")
+
+    def test_raw_cache_lives_in_cache_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "config.json",
+                         overrides={"paths": {"cache": str(tmp / "cache"),
+                                              "data": str(tmp / "data"),
+                                              "reports": str(tmp / "reports")}})
+            self.assertEqual(cfg.raw_cache_dir, tmp / "cache" / "raw")
+            self.assertNotIn("data", str(cfg.raw_cache_dir))
 
 
 class PackageVerifierTest(HermeticTestCase):

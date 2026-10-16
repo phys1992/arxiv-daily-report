@@ -63,6 +63,14 @@ def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
         from .server import start_web_thread
 
         start_web_thread(cfg, store)
+    # 启动时清一次缓存，避免长期运行把磁盘撑满（只动缓存，不影响报告）
+    try:
+        from .cleanup import cleanup_cache
+
+        cleanup_cache(cfg, store, progress=lambda m: log.info("%s", m))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("缓存清理失败（不影响生成）：%s", exc)
+
     sched = cfg["schedule"]
     if sched.get("mode") == "manual":
         log.warning("调度模式为 manual：常驻进程不会自动运行，请通过 Web 界面或 CLI 手动触发")

@@ -116,7 +116,9 @@
     'status.papers_total': '库内累计论文', 'status.math_cache': '公式缓存', 'status.next_run': '下次运行',
     'status.pdf_backends': 'PDF 后端', 'status.usage': '本月模型调用',
     'status.usage_tokens': '输入 {p} / 输出 {c} tokens',
-    'status.home': '配置根目录', 'status.reports_dir': '报告目录', 'status.data_dir': '数据目录',
+    'status.home': '配置根目录', 'status.config_dir': '配置目录',
+    'status.reports_dir': '报告目录（最终 PDF）', 'status.data_dir': '状态目录（数据库）',
+    'status.cache_dir': '缓存目录（可清理）',
     'status.publish_dir': '发布目录', 'status.no_reports': '暂无报告记录。', 'status.open_pdf': '打开',
     'status.no_runs': '暂无运行记录。',
     'job.running': '运行中 · {kind}', 'job.idle': '空闲', 'job.done_ok': '已完成',
@@ -537,13 +539,16 @@
     var m = state.meta || {};
     var cfg = state.config || {};
     var publishValue = (cfg.paths && cfg.paths.publish_dir) || '';
-    var publish = publishValue ? joinPath(m.home, publishValue) : '';
+    var base = m.config_dir || m.home || '';
+    var publish = publishValue ? joinPath(base, publishValue) : '';
     var list = $('#paths-resolved');
     list.textContent = '';
+    // 报告目录放最前面：用户只需要知道最终文件在哪
     var rows = [
-      ['status.home', m.home],
       ['status.reports_dir', m.reports_dir],
+      ['status.config_dir', m.config_dir],
       ['status.data_dir', m.data_dir],
+      ['status.cache_dir', m.cache_dir],
       ['status.publish_dir', publish || t('common.none')]
     ];
     rows.forEach(function (row) {
