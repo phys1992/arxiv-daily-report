@@ -1600,6 +1600,55 @@ class PackageVerifierTest(HermeticTestCase):
         blob += ar_member("data.tar.gz", payload)
         path.write_bytes(blob)
 
+    @staticmethod
+    def _make_rpm(path: Path, members: dict[str, str]) -> None:
+        """手工造一个最小合法 rpm：cpio(newc) + gzip 载荷。
+
+        用来验证纯 Python 的 rpm 读取器真的能读到内层文件 ——
+        之前它依赖 bsdtar，CI 镜像上没有这个命令，打包作业直接失败。
+        """
+        import gzip as _gzip
+        import struct as _struct
+
+        def cpio(members: dict[str, str]) -> bytes:
+            out = b""
+            ino = 100
+            for name, content in members.items():
+                body = content.encode()
+                raw = name.encode() + b"\x00"
+                fields = [ino, 0o100644, 0, 0, 1, 0, len(body), 0, 0, 0, 0, len(raw), 0]
+                out += b"070701" + b"".join(f"{v:08x}".encode() for v in fields)
+                out += raw
+                out += b"\x00" * ((4 - len(out) % 4) % 4)   # 填充相对归档开头
+                out += body
+                out += b"\x00" * ((4 - len(out) % 4) % 4)
+                ino += 1
+            trailer = b"TRAILER!!!\x00"
+            fields = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, len(trailer), 0]
+            out += b"070701" + b"".join(f"{v:08x}".encode() for v in fields) + trailer
+            out += b"\x00" * ((4 - len(out) % 4) % 4)
+            return out
+
+        def header(entries, data: bytes) -> bytes:
+            body = b"\x8e\xad\xe8\x01" + b"\x00" * 4
+            body += _struct.pack(">II", len(entries), len(data))
+            for tag, typ, off, cnt in entries:
+                body += _struct.pack(">iiii", tag, typ, off, cnt)
+            return body + data
+
+        lead = (b"\xed\xab\xee\xdb" + b"\x03\x00" + b"\x00\x00" + b"\x00\x01"
+                + b"adr-test".ljust(66, b"\x00") + b"\x00\x01" + b"\x00\x05"
+                + b"\x00" * 16)
+        assert len(lead) == 96, len(lead)
+
+        sig = header([], b"")
+        sig += b"\x00" * ((8 - len(sig) % 8) % 8)
+        tags = b"cpio\x00gzip\x00"
+        main = header([(1124, 6, 0, 1), (1125, 6, 5, 1)], tags)
+        payload = _gzip.compress(cpio(members), mtime=0)
+        blob = lead + sig + main + payload
+        path.write_bytes(blob)
+
     def _verify(self, *pkgs: Path) -> tuple[int, str]:
         import contextlib
         import io
@@ -1643,6 +1692,65 @@ class PackageVerifierTest(HermeticTestCase):
             code, out = self._verify(deb)
             self.assertEqual(code, 0, out)
             self.assertIn("通过校验", out)
+
+    def test_rpm_contents_are_read_without_bsdtar(self):
+        """rpm 必须纯 Python 读出来 —— CI 镜像上没有 bsdtar。"""
+        with tempfile.TemporaryDirectory() as td:
+            rpm = Path(td) / "pkg-1.0.x86_64.rpm"
+            self._make_rpm(rpm, {
+                "usr/bin/arxiv-daily-report": "#!/usr/bin/python3\n",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/cli.py": "x=1\n",
+                "usr/lib/systemd/user/arxiv-daily-report.service": "[Unit]\n",
+                "usr/share/arxiv-daily-report/data/arxiv_categories.json": "{}\n",
+                "usr/share/arxiv-daily-report/data/theme_taxonomy.json": "{}\n",
+                "usr/share/arxiv-daily-report/web/index.html": "<html>\n",
+                "usr/share/doc/arxiv-daily-report/README.md": "x\n",
+                "usr/share/licenses/arxiv-daily-report/LICENSE": "x\n",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/__init__.py": "x\n",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/config.py": "x\n",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/render.py": "x\n",
+                "usr/share/arxiv-daily-report/web/app.js": "x\n",
+                "usr/share/arxiv-daily-report/assets/mathjax/render.js": "x\n",
+            })
+            code, out = self._verify(rpm)
+            self.assertEqual(code, 0, out)
+            self.assertIn("通过校验", out)
+
+    def test_rpm_verifier_rejects_runtime_data(self):
+        """纯 Python 读取器不能变成假阴性：脏数据照样要拦下。"""
+        with tempfile.TemporaryDirectory() as td:
+            rpm = Path(td) / "pkg-1.0.x86_64.rpm"
+            members = {
+                "usr/bin/arxiv-daily-report": "x",
+                "usr/lib/systemd/user/arxiv-daily-report.service": "x",
+                "usr/share/arxiv-daily-report/data/arxiv_categories.json": "x",
+                "usr/share/arxiv-daily-report/data/theme_taxonomy.json": "x",
+                "usr/share/arxiv-daily-report/web/index.html": "x",
+                "usr/share/doc/arxiv-daily-report/README.md": "x",
+                "usr/share/licenses/arxiv-daily-report/LICENSE": "x",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/cli.py": "x",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/__init__.py": "x",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/config.py": "x",
+                "usr/lib/arxiv-daily-report/arxiv_daily_report/render.py": "x",
+                "usr/share/arxiv-daily-report/web/app.js": "x",
+                "usr/share/arxiv-daily-report/assets/mathjax/render.js": "x",
+            }
+            self._make_rpm(rpm, members)
+            code, out = self._verify(rpm)
+            self.assertEqual(code, 0, out)
+
+            members["usr/share/arxiv-daily-report/data/state.sqlite3"] = "dirty"
+            self._make_rpm(rpm, members)
+            code, out = self._verify(rpm)
+            self.assertEqual(code, 1, out)
+            self.assertIn("state.sqlite3", out)
+
+    def test_rpm_verifier_rejects_missing_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            rpm = Path(td) / "pkg-1.0.x86_64.rpm"
+            self._make_rpm(rpm, {"usr/bin/arxiv-daily-report": "x"})
+            code, out = self._verify(rpm)
+            self.assertEqual(code, 1, out)
 
     def test_verifier_rejects_runtime_data(self):
         """混入运行期数据必须被拦下——这是发布前的最后一道闸。"""
