@@ -101,4 +101,4 @@ jobs:
             pip install --user weasyprint       # 或 pipx install weasyprint
             ```
 
-            详见 README 的「依赖与安装」。
+            详见 README 的安装与依赖说明。
