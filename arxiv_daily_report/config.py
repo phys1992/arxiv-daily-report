@@ -238,7 +238,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 只清理可再生的中间数据（arXiv 原始 XML、公式 SVG、全文摘录），
     # 不会动最终报告，也不会动去重记录与日报摘要。
     "cache": {
-        "cleanup": "3m",               # 1d | 3d | 1w | 1m | 3m | 6m | never
+        "cleanup": "3m",               # 1w | 2w | 1m | 2m | 3m | 6m | 1y | never
     },
     # ---- 全文（读取论文结论/讨论小节）----
     "fulltext": {

@@ -209,15 +209,16 @@
     "report.font_preset_hint": "arXiv 预印本观感用 Computer Modern 西文 + 思源宋体中文；期刊发表版（PRD 等）用 Times 系。缺字体时会自动回退。",
     "cache.cleanup": "缓存清理周期",
     "cache.cleanup_hint": "只清理可再生的中间数据（arXiv 原始响应、公式缓存、全文摘录），不会动最终报告，也不会动去重记录与日报摘要。",
-    "cache.opt.1d": "每天",
-    "cache.opt.3d": "每 3 天",
     "cache.opt.1w": "每周",
     "cache.opt.1m": "每月",
     "cache.opt.3m": "每 3 个月（默认）",
     "cache.opt.6m": "每半年",
-    "cache.opt.never": "不清理",
+    "cache.opt.never": "永久保留（不清理）",
     "status.config_dir": "配置目录",
-    "status.cache_dir": "缓存目录（可清理）"
+    "status.cache_dir": "缓存目录（可清理）",
+    "cache.opt.2w": "每 2 周",
+    "cache.opt.2m": "每 2 个月",
+    "cache.opt.1y": "每年"
   },
   "en": {
     "app.title": "arXiv Daily Report Settings",
@@ -429,14 +430,15 @@
     "report.font_preset_hint": "Use Computer Modern for Latin and Source Han Serif for CJK to match arXiv preprints; the journal style follows published PRD-like articles. Missing fonts fall back automatically.",
     "cache.cleanup": "Cache cleanup interval",
     "cache.cleanup_hint": "Only regenerable intermediate data is removed (raw arXiv responses, formula cache, full-text extracts). Final reports, de-duplication records and daily digests are never touched.",
-    "cache.opt.1d": "Daily",
-    "cache.opt.3d": "Every 3 days",
     "cache.opt.1w": "Weekly",
     "cache.opt.1m": "Monthly",
     "cache.opt.3m": "Every 3 months (default)",
     "cache.opt.6m": "Every 6 months",
-    "cache.opt.never": "Never",
+    "cache.opt.never": "Keep forever (no cleanup)",
     "status.config_dir": "Config directory",
-    "status.cache_dir": "Cache (safe to clean)"
+    "status.cache_dir": "Cache (safe to clean)",
+    "cache.opt.2w": "Every 2 weeks",
+    "cache.opt.2m": "Every 2 months",
+    "cache.opt.1y": "Yearly"
   }
 }

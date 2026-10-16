@@ -1246,13 +1246,22 @@ class CacheCleanupTest(HermeticTestCase):
         from arxiv_daily_report.cleanup import CLEANUP_OPTIONS, DEFAULT_CLEANUP, interval_days
 
         self.assertEqual(DEFAULT_CLEANUP, "3m")
-        self.assertEqual(CLEANUP_OPTIONS["1d"], 1)
-        self.assertEqual(CLEANUP_OPTIONS["6m"], 180)
-        self.assertEqual(interval_days("3m"), 90)
+        # 最短一周：不再提供按天清理
+        self.assertEqual(CLEANUP_OPTIONS["1w"], 7)
+        self.assertEqual(min(d for d in CLEANUP_OPTIONS.values() if d > 0), 7)
+        for key in ("1d", "3d"):
+            self.assertNotIn(key, CLEANUP_OPTIONS, "最短周期应为一周")
+        self.assertEqual(CLEANUP_OPTIONS["2w"], 14)
+        self.assertEqual(CLEANUP_OPTIONS["2m"], 60)
+        self.assertEqual(CLEANUP_OPTIONS["1y"], 365)
+        self.assertEqual(interval_days("6m"), 180)
         self.assertEqual(interval_days("never"), 0)
         # 不认识的值回落到默认（3 个月），而不是当成 0=不清理
         self.assertEqual(interval_days("nonsense"), 90)
         self.assertEqual(interval_days(None), 90)
+        # 旧配置里的按天周期按新的最短周期处理，不要突然放宽到 3 个月
+        self.assertEqual(interval_days("1d"), 7)
+        self.assertEqual(interval_days("3d"), 7)
 
     def test_removes_only_expired_cache(self):
         import datetime as _dt

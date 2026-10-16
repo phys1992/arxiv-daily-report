@@ -6,8 +6,9 @@
     数据库的主表里，这里绝不触碰；
   * 报告：用户最终要的文件，更不会动。
 
-周期选项与 ``cache.cleanup`` 配置一一对应：1d / 3d / 1w / 1m / 3m / 6m / never。
-默认 3m（三个月）。
+周期选项与 ``cache.cleanup`` 配置一一对应：
+1w / 2w / 1m / 2m / 3m / 6m / 1y / never，默认 3m（三个月）。
+最短一周——缓存本来就不必天天清，周期太短只会让重复抓取变多。
 """
 from __future__ import annotations
 
@@ -24,24 +25,34 @@ log = logging.getLogger(__name__)
 __all__ = ["CLEANUP_OPTIONS", "DEFAULT_CLEANUP", "interval_days", "cleanup_cache",
            "cache_usage", "release_abstracts"]
 
-# 选项 -> 天数（0 表示永不清理）
+# 选项 -> 天数（0 表示永不清理）。最短一周。
 CLEANUP_OPTIONS: dict[str, int] = {
-    "1d": 1,
-    "3d": 3,
-    "1w": 7,
-    "1m": 30,
-    "3m": 90,
-    "6m": 180,
-    "never": 0,
+    "1w": 7,        # 每周
+    "2w": 14,       # 每 2 周
+    "1m": 30,       # 每月
+    "2m": 60,       # 每 2 个月
+    "3m": 90,       # 每 3 个月（默认）
+    "6m": 180,      # 每半年
+    "1y": 365,      # 每年
+    "never": 0,     # 永久保留
 }
 DEFAULT_CLEANUP = "3m"
+
+# 旧版本用过、现在已下线的最小周期；落到新的最短周期而不是跳到默认值，
+# 免得升级后行为突然从「每天清」变成「三个月清」。
+_LEGACY = {"1d": "1w", "3d": "1w"}
 
 _DATE_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def interval_days(spec: str | None) -> int:
-    """把配置里的周期字符串换成天数；不认识的值回落到默认。"""
+    """把配置里的周期字符串换成天数。
+
+    未知值回落到默认（3 个月）；旧版用过的 1d/3d 按新的最短周期 1w 处理，
+    避免升级后清理频率意外大幅放宽。
+    """
     key = str(spec or "").strip().lower()
+    key = _LEGACY.get(key, key)
     return CLEANUP_OPTIONS.get(key, CLEANUP_OPTIONS[DEFAULT_CLEANUP])
 
 
