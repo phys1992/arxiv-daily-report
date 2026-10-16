@@ -23,17 +23,52 @@
 | **多分类去重** | 按 arXiv ID 全局去重：同一篇论文只调用一次模型，只出现在一份报告里 |
 | **仅统计新投稿** | 只收 v1 首次公开，忽略版本更新（可配置） |
 | **北京时间自然日** | 报告日按 `Asia/Shanghai` 自然日切分；自动回溯 7 天，周末/节假日延迟公告也能补录 |
-| **结合全文** | 抓取 arXiv 官方 HTML，读取论文的**结论/讨论/总结**小节原文，与摘要一起交给模型；摘要不能只复述摘要。抓不到全文（老论文等）时如实降级为仅摘要，绝不假装读过 |
-| **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；**默认按 arXiv 预印本排版**——西文与公式用 **Computer Modern**，汉字用 **思源宋体**；缺字体时自动回退并在日志里提示 |
+| **结合全文** | 抓取 arXiv 官方 HTML，读取论文的**结论/讨论/总结**小节原文，与摘要一起交给模型；抓不到全文（老论文等）时如实降级为仅摘要 |
+| **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；默认按 arXiv 预印本排版——西文与公式用 **Computer Modern**，汉字用 **思源宋体**；缺字体时自动回退并在日志里提示 |
 | **公式排版** | MathJax 预渲染成 SVG（与 LaTeX 输出同一套 Computer Modern 字形），按公式哈希缓存 |
-| **论文清单** | 每篇给出作者、标题、arXiv 号与可点击链接（由代码从元数据生成，模型不参与）；不再单列参考文献表 |
-| **月度简报** | **每月 1 号**（北京时间）自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**不设字数上限**，力求准确的前提下简明扼要；**重要文献在对应日期后附 arXiv 号**（如（10月13日，arXiv:2610.17034）），号逐条核对确属该日，编造或张冠李戴的一律剔除 |
-| **Web 配置界面** | 模型/调度/路径/语言/分类订阅全部可视化配置，改完即时生效；常驻服务也会一并提供，任何时候用 `arxiv-daily-report status` 取回访问地址 |
+| **论文清单** | 每篇给出作者、标题、arXiv 号与可点击链接（由代码从元数据生成，模型不参与） |
+| **月度简报** | **每月 1 号**自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**重要文献在对应日期后附 arXiv 号**，号逐条核对确属该日 |
+| **Web 配置界面** | 模型/调度/路径/字体/语言/分类订阅全部可视化配置，改完即时生效；本机直接打开即可，无需令牌 |
 | **多模型支持** | DeepSeek、Kimi(Moonshot)、OpenAI、Claude(Anthropic)，以及任意**本地 OpenAI 兼容服务** |
 | **systemd 用户服务** | `systemctl --user` 一键开机自启，**不需要 root**，也不会有权限问题 |
-| **三种安装包** | Debian/Ubuntu 的 `.deb`、Fedora/RHEL 的 `.rpm`、Arch/Manjaro 的 `.pkg.tar.zst`，由 GitHub Actions 打 tag 自动构建发布 |
-| **XDG 目录规范** | 配置进 `~/.config`、数据进 `~/.local/share`、缓存进 `~/.cache`；也支持 `ADR_HOME` 便携模式（整个目录拷走就能用） |
-| **测试** | 85 项离线测试（含用本地 mock 验证的两种模型协议适配），不联网、不消耗模型额度 |
+| **三种安装包** | Debian/Ubuntu 的 `.deb`、Fedora/RHEL 的 `.rpm`、Arch/Manjaro 的 `.pkg.tar.zst` |
+| **XDG 目录规范** | 报告进「文档」目录，配置/状态/缓存各归其位；也支持 `ADR_HOME` 便携模式（整个目录拷走就能用） |
+| **离线测试** | 118 项，不联网、不消耗模型额度 |
+
+---
+
+## 工作原理
+
+### 日报
+
+每天定时（默认北京时间 19:00）跑一次：
+
+1. **抓取** 通过 arXiv API 拉取订阅分类在目标日（默认昨天）的论文。报告日按北京时间自然日切分，
+   并向前**回溯若干天**（默认 7 天），这样周末与节假日延迟公告的论文也不会漏；只收首次公开的 v1。
+2. **去重** 按 arXiv ID 全局去重。一篇论文只调用一次模型，也只出现在一份报告里
+   （跨分类的交叉列表论文按 `crosslist_policy` 决定归属）。
+3. **读全文** 每篇抓一次 arXiv 官方 HTML，提取**结论 / 讨论 / 总结**类小节的原文，
+   与摘要一起作为模型输入。摘要交代问题与方法，结论给出最终结果、适用条件与定量数值。
+   拿不到 HTML 的（老论文等）如实降级为仅摘要，不会假装读过。
+4. **生成要点** 把当天的论文一次性交给大模型，产出三样东西：**今日要点**、
+   **各主题的当日综述**、**每篇论文的一句话要点**。提示词要求：只用给定材料、
+   术语用领域标准译名、数值与成立条件不得改动、语法从简。
+5. **排版** 用 WeasyPrint 渲染成 PDF：公式由 MathJax 预渲染成 SVG（Computer Modern 字形）；
+   论文清单里的作者、标题、arXiv 号与链接由代码从元数据生成，模型不参与。
+6. **存档** 当天的要点与主题综述存进数据库，供月报使用。
+
+### 月报
+
+每月 1 号执行，覆盖上一个自然月：
+
+1. **只读当月日报的存档**（今日要点 + 各主题综述 + 各主题篇数），不再回头翻原始论文，
+   也不再联网抓全文。
+2. **两步浓缩**：先按主题汇总（内容多时自动分批再合并），再生成一段总览与主要进展。
+3. **附 arXiv 号**：重要文献在日期后附号，如（10月13日，arXiv:2610.17034）。
+   号只能从"可引用清单"（当天论文的号 + 标题）里挑；生成后还会逐条核对是否确属该日，
+   编造或张冠李戴的一律剔除，只保留日期。
+
+因此**先有日报才会有月报**；某个月没有日报时，月报会提示并跳过。
 
 ---
 
@@ -88,7 +123,7 @@ docker run -d --name arxiv-daily -p 8765:8765 -e ADR_WEB_PASSWORD=你的口令 a
 
 > 绑定非回环地址时必须设置 `ADR_WEB_PASSWORD`，否则程序拒绝启动。
 
-### 依赖（方式一、二都需要）
+### 依赖
 
 **本项目不打包字体，也不打包 WeasyPrint**，需要由系统提供：
 
@@ -117,16 +152,15 @@ sudo apt install fonts-noto-cjk       # Debian/Ubuntu；Fedora: sudo dnf install
 | 用途 | 字体 | 说明 |
 |---|---|---|
 | **西文 + 数学** | **Computer Modern**（Latin Modern / CMU） | LaTeX 默认字体，也就是 arXiv 上绝大多数 PDF 的正文与公式 |
-| **中文** | **思源宋体**（Source Han Serif SC / Noto Serif CJK SC） | 宋体是中文科技论文的正文惯例；与 CM 的搭配实测最协调 |
+| **中文** | **思源宋体**（Source Han Serif SC / Noto Serif CJK SC） | 宋体是中文科技论文的正文惯例 |
 
-**强烈建议装上这两套**，否则会退到备选字体（见下表），观感会变。
-
-程序启动时会自动检测（`arxiv-daily-report status` 也能看到实际用的是哪套）：
+**强烈建议装上这两套**，否则会退到备选字体，观感会变。程序启动时会自动检测
+（`arxiv-daily-report status` 也能看到实际用的是哪套）：
 
 | 情况 | 行为 |
 |---|---|
 | 系统注册了 Latin Modern / CMU | 直接用 |
-| **只装了 TeX Live** | **自动使用 TeX Live 里的 Latin Modern 文件**（`@font-face` 内联），不必再装字体包 |
+| **只装了 TeX Live** | **自动使用 TeX Live 里的 Latin Modern 文件**，不必再装字体包 |
 | 两者都没有 | 西文退到 Times 系（Nimbus Roman → Liberation Serif → …），日志给出安装命令 |
 | 没有思源宋体 | 中文退到 `Noto Serif CJK SC` → `SimSun` → 系统默认，日志给出安装命令 |
 | 完全没有中文字体 | 汉字会显示为方块，日志明确告警 |
@@ -165,7 +199,7 @@ sudo dnf install google-noto-serif-cjk-fonts          # Fedora
 
 ## 快速开始
 
-### 直接运行（源码目录，零安装）
+### 源码方式
 
 clone 下来就能跑——**不装任何 Python 包也能出 PDF**（会自动选用 Chromium 后端）：
 
@@ -218,7 +252,9 @@ systemctl --user enable --now arxiv-daily-report     # 安装包方式，单元�
 journalctl --user -u arxiv-daily-report -f
 ```
 
-### 怎么打开 Web 配置界面
+---
+
+## 怎么打开 Web 配置界面
 
 **直接打开就行，不需要令牌也不需要密码：**
 
@@ -226,21 +262,20 @@ journalctl --user -u arxiv-daily-report -f
 http://127.0.0.1:8765
 ```
 
-界面默认只监听回环地址（`127.0.0.1`），所以采用「本机即可信」的模型——和 v2rayA、
-Transmission 这类本地工具一致。查当前地址：
+界面默认只监听回环地址（`127.0.0.1`），采用「本机即可信」的模型。查当前地址：
 
 ```bash
 arxiv-daily-report status        # 输出里有「配置界面」一行
 arxiv-daily-report serve         # 临时起一个前台实例，会自动打开浏览器
 ```
 
-常驻服务（systemd）在后台跑着时，地址同样是这一行：
+常驻服务在后台跑着时，地址同样是这一行：
 
 ```bash
 journalctl --user -u arxiv-daily-report | grep 在浏览器里打开
 ```
 
-#### 三种访问模式
+### 三种访问模式
 
 | 模式 | 触发条件 | 怎么进 |
 |---|---|---|
@@ -248,14 +283,11 @@ journalctl --user -u arxiv-daily-report | grep 在浏览器里打开
 | **令牌** | `web.require_token = true` | 用 `status` 打印的 `?token=...` 地址 |
 | **密码** | 设了 `web.password`（对外监听时强制） | 直接开，输入密码登录 |
 
-#### 安全边界
+### 安全边界
 
 - 对外监听（`web.host` 设为 `0.0.0.0` 等）时**强制要求密码**，否则拒绝启动——同网段任何人都能改你的模型密钥。
 - 免认证模式下会校验 `Host` 头，挡掉 **DNS rebinding**（恶意网页把域名解析到 127.0.0.1 再借浏览器打本机服务）。
-- 免认证只适用于「本机是可信的」这一前提。如果是多人共用的机器，建议设 `web.password`
-  或打开 `web.require_token`。
-
-想恢复「必须带令牌」：`web.require_token = true`（Web 界面「界面设置」里也有开关）。
+- 免认证只适用于「本机是可信的」这一前提。多人共用的机器建议设 `web.password` 或打开 `web.require_token`。
 
 常用参数：
 
@@ -265,38 +297,13 @@ arxiv-daily-report serve --no-open          # 不自动打开浏览器
 arxiv-daily-report daemon --no-web          # 常驻但不开界面
 ```
 
-产物（安装包方式在 `~/.local/share/arxiv-daily-report/reports/`，源码方式在项目内 `reports/`）：
-
-```
-reports/
-├── gr-qc/
-│   ├── 2026-10/                  # 日报再按月份分一层：长期运行也不会堆成几百个文件
-│   │   ├── 2026-10-07.pdf
-│   │   ├── 2026-10-12.pdf
-│   │   └── 2026-10-13.pdf
-│   ├── 2026-11/
-│   │   └── 2026-11-02.pdf
-│   └── latest.pdf                # 最新一期，路径固定不变，便于反复打开
-├── hep-th/
-│   └── 2026-10/2026-10-13.pdf
-├── combined/                     # output_mode 为 combined/both 时的合并日报
-│   └── 2026-10/2026-10-13.pdf
-├── monthly/
-│   ├── gr-qc/2026-10.pdf         # 月报按分类分目录
-│   └── arXiv/2026-10.pdf         # 订阅多个分类时，合并简报放在 arXiv/
-└── index.md                      # 全部报告的索引（Markdown 表格，链接可用）
-```
-
-层级规则：**日报 `<分类>/<年-月>/`，月报 `monthly/<分类>/`**（订阅多个分类时合并简报用 `arXiv/`）。
-分类的 `out_dir` 配置项仍可覆盖日报的根目录；`paths.reports` 决定整个 `reports/` 的位置。
-
 ---
 
 ## 开机自启：用 systemd 用户服务
 
 **请用用户级服务（`systemctl --user`），不要用系统级服务。** 原因：
 
-- 程序要读写你自己的 `~/.config`、`~/.local/share`、`~/.cache`——以你的身份运行天然没有权限问题；
+- 程序要读写你自己的 `~/.config`、`~/.local/state`、`~/.cache`——以你的身份运行天然没有权限问题；
 - 系统级服务默认以 root 运行，会把报告和数据库写成 root 所有，之后你自己反而改不动；
 - 模型密钥是你个人的，放在用户目录里更合适。
 
@@ -315,7 +322,7 @@ systemctl --user disable --now arxiv-daily-report    # 停用
 sudo loginctl enable-linger "$USER"
 ```
 
-### 源码方式
+### 源码方式（脚本安装单元）
 
 ```bash
 ./systemd/install-service.sh              # 自动生成并启用单元
@@ -336,8 +343,9 @@ arxiv-daily-report collect  [--day YYYY-MM-DD] [--category gr-qc]   # 只抓取�
 arxiv-daily-report daily    [--day YYYY-MM-DD] [--no-llm]           # 抓取并生成日报
 arxiv-daily-report monthly  [--month YYYY-MM] [--no-llm]            # 生成月报（默认上一个自然月）
 arxiv-daily-report serve    [--port 8765] [--no-open]               # Web 配置界面
-arxiv-daily-report daemon                                           # 常驻定时（systemd 就是跑它）
+arxiv-daily-report daemon                                           # 常驻定时（同时提供配置界面）
 arxiv-daily-report status                                           # 运行状态与目录位置
+arxiv-daily-report cleanup  [--dry-run]                             # 清理缓存（中间数据）
 ```
 
 `--no-llm` 只出 PDF 不调用模型，适合先验证抓取与排版，或节省额度。
@@ -349,20 +357,14 @@ arxiv-daily-report status                                           # 运行状�
 | | 日报 | 月度简报 |
 |---|---|---|
 | 何时生成 | 每天（默认北京时间 19:00） | **每月 1 号**，覆盖上一个自然月 |
-| 数据来源 | arXiv API 的当日新增论文 | **只读当月日报的要点存档**，不回头翻原始论文 |
+| 数据来源 | arXiv API 的当日新增论文 + 每篇的 arXiv HTML 结论节 | **只读当月日报的要点存档** |
 | 结构 | 今日要点 + 分类速览 + 论文清单（含作者/标题/arXiv 号/链接） | 本月概览（一段） + 主要进展 + 分主题要点 |
-| 数据来源补充 | 每篇抓一次 arXiv HTML，读出结论/讨论原文 | 复用日报存档，不再联网抓全文 |
 | 引用方式 | 论文清单里的编号 `[3]` | 标日期；**重要文献**再附 arXiv 号，如（10月13日，arXiv:2610.17034），可点击 |
-| 依据 | 全文的结论/讨论小节 + 摘要 | 当月日报的要点存档 |
 | 参考文献表 | 无（清单已含全部信息） | 无 |
 | 篇幅 | 约 5–15 页（随当日论文数） | 不设字数上限；准确优先，简明其次 |
 
-月报的输入是每天日报存档下来的「今日要点 + 各主题综述 + 各主题篇数」。
-因此**先要有日报，才会有月报**；某个月没有生成过日报时，月报会提示并跳过。
-
 术语与表述统一要求（日报与月报都适用）：**术语用领域标准译名、表述与原文一致、逻辑完整、语法从简**。
-月报额外要求：**力求准确是第一位的**——宁可写长一点把事情说清楚，也不为了短而牺牲准确性；
-在准确的前提下不重复、不铺陈、不写套话。
+月报额外要求：**力求准确是第一位的**——宁可写长一点把事情说清楚，也不为了短而牺牲准确性。
 
 ---
 
@@ -386,7 +388,27 @@ arxiv-daily-report status                                           # 运行状�
 缓存进 `XDG_CACHE_HOME`，最终产物进用户的「文档」目录
 （用 `xdg-user-dir DOCUMENTS` 解析，中文系统会落到 `~/文档`）。
 
-#### 缓存清理
+### 报告的目录结构
+
+```
+reports/
+├── gr-qc/
+│   ├── 2026-10/                  # 日报按月份分一层：长期运行也不会堆成几百个文件
+│   │   ├── 2026-10-07.pdf
+│   │   └── 2026-10-13.pdf
+│   └── latest.pdf                # 最新一期，路径固定不变，便于反复打开
+├── combined/                     # output_mode 为 combined/both 时的合并日报
+│   └── 2026-10/2026-10-13.pdf
+├── monthly/
+│   ├── gr-qc/2026-10.pdf         # 月报按分类分目录
+│   └── arXiv/2026-10.pdf         # 订阅多个分类时，合并简报放在 arXiv/
+└── index.md                      # 全部报告的索引（Markdown 表格，链接可用）
+```
+
+层级规则：**日报 `<分类>/<年-月>/`，月报 `monthly/<分类>/`**。
+分类的 `out_dir` 可覆盖日报的根目录；`paths.reports` 决定整个 `reports/` 的位置。
+
+### 缓存清理
 
 中间数据（arXiv 原始响应、公式 SVG、论文全文摘录）会随时间累积——
 原始响应约 1–2 MB/天，一年下来几百 MB。程序会**定期自动清理**：
@@ -409,46 +431,32 @@ arxiv-daily-report cleanup              # 直接清理
 | 每年 | `1y` | 365 |
 | 永久保留 | `never` | 不清理 |
 
-> 最短一周：缓存没必要天天清，周期太短只会让重复抓取变多。
+清理**只动缓存**，最终报告不会被动。常驻服务每次启动时会自动清一次，
+`status` 里能看到当前占用与周期。
 
-清理**只动缓存**：最终报告、去重记录、日报摘要（月报要用）、用量账本都不会被碰。
-常驻服务每次启动时会自动清一次，`status` 里能看到当前占用与周期。
+### 数据长期保留策略
 
-#### 长期运行会不会撑爆？
+按每天 30 篇论文估算增长量：
 
-把各项增长量算清楚就放心了（按每天 30 篇论文估）：
-
-| 项 | 增长 | 说明 |
+| 内容 | 年增长 | 处理 |
 |---|---|---|
-| arXiv 原始 XML | ~600 MB/年 | **缓存**，按上面的周期自动清理 |
-| 论文全文摘录 | ~60 MB/年 | **缓存**，同上 |
-| 数据库 `papers` | ~33 MB/年 | 主要是摘要原文 |
-| `day_digest` | ~2 MB/年 | 月报的输入 |
+| arXiv 原始响应 | ~600 MB | 缓存，按上面的周期自动清理 |
+| 论文全文摘录 | ~60 MB | 缓存，同上 |
+| 论文要点 + 元数据 | ~11 MB | 长期保留 |
+| 日报摘要存档 | ~2 MB | 长期保留 |
 
-前两项是大头，已经被缓存清理覆盖。剩下最大的是数据库里的**摘要原文**（占库容七成）。
+长期保留的三样东西各有用途：
 
-**月报生成之后，上个月的数据库还有用吗？** 大部分有用，只有一项可以放掉：
+- **论文要点与元数据** —— 重跑某天的日报时直接复用，不再调用模型。
+- **日报摘要存档** —— 重新生成月报（换语言、换字体、提示词升级）时要用。
+- **摘要原文** —— 只用于「生成要点」那一步，渲染 PDF 并不需要，而且随时能从 arXiv 重新取回。
+  因此当某一天的论文**都已经有当前版本的要点**、且当天**存有日报摘要**时，
+  程序会释放这些摘要原文（通常可省下数据库约七成空间）。
+  条件不满足的一律保留，保证任何时候重跑都不会因为缺输入而产出劣质要点。
 
-| 内容 | 月报之后是否还需要 |
-|---|---|
-| `day_digest`（日报摘要存档） | **需要** —— 重新生成那期月报（换语言、换字体、模型升级）就靠它 |
-| 论文要点 + 元数据 | **需要** —— 重跑那天的日报能直接复用，不再花一次模型钱 |
-| **摘要原文**（`abstract`） | **不再需要** —— 它只用于「生成要点」这一步，渲染 PDF 根本不用，而且随时能从 arXiv 重新取回 |
-| 用量账本 | 保留（很小） |
+用 `arxiv-daily-report status` 可以看到本机实际使用的路径与占用。
 
-所以程序会自动**释放**用不上的摘要原文，条件很严格（满足才放，否则保留）：
-
-1. 该论文已有**当前提示词版本**的要点 —— 重跑那天会走复用路径，不会再送进模型；
-2. 它所属日期的日报摘要有存档 —— 保证那次复用确实发生。
-
-换句话说，**只有「整天都已经是当前版本的成果」的日期才会释放**。这样即使以后重跑，
-喂给模型的输入一定是完整的，绝不会因为缺摘要而生成劣质要点。
-
-> 顺带修了一个 bug：`papers.summarized` 字段以前只写不读，导致**每次重跑旧日报都会把
-> 全部论文重新送给模型**（重复花钱）。现在按「要点是否存在 + 提示词版本是否一致 +
-> 当天存档是否在」判断，整天都齐就直接复用存档，一次模型都不调。
-
-用 `arxiv-daily-report status` 可以看到本机实际使用的路径。关键配置项：
+### 关键配置项
 
 ```jsonc
 {
@@ -486,7 +494,7 @@ arxiv-daily-report cleanup              # 直接清理
     "math_backend": "auto"              // auto | mathjax | unicode
   },
   "paths": {
-    "reports": "",                      // 空 = 自动推导
+    "reports": "",                      // 空 = 安装版用「文档」目录，源码版用项目内 reports/
     "data": "",
     "cache": "",
     "publish_dir": ""                   // 例如同步盘目录；空则不发布
@@ -498,7 +506,7 @@ arxiv-daily-report cleanup              # 直接清理
 
 | 变量 | 作用 |
 |---|---|
-| `ADR_HOME` | 便携模式总目录：配置/数据/缓存/报告全部收进这里 |
+| `ADR_HOME` | 便携模式总目录：配置/状态/缓存/报告全部收进这里 |
 | `ADR_CONFIG_HOME` / `ADR_DATA_HOME` / `ADR_CACHE_HOME` | 分别指定三个目录 |
 | `ADR_PREFIX` | 系统安装前缀，默认 `/usr`（用于 `/usr/local`、Nix 等布局） |
 | `ADR_ASSETS` | 静态资产目录（MathJax 等） |
@@ -509,7 +517,7 @@ arxiv-daily-report cleanup              # 直接清理
 **密钥存放**（优先级从高到低）：
 
 1. 环境变量：`DEEPSEEK_API_KEY` / `MOONSHOT_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `CUSTOM_API_KEY`
-2. `secrets.json`（权限 600，`chmod 600` 自动设置，已在 `.gitignore` 中）
+2. `secrets.json`（权限 600，已在 `.gitignore` 中）
 
 Web 界面里只会回显掩码（`sk-2431••••••••abcd`），永不返回明文。
 
@@ -520,35 +528,10 @@ Web 界面里只会回显掩码（`sk-2431••••••••abcd`），永
 | 厂商 | Wire 协议 | 备注 |
 |---|---|---|
 | DeepSeek / Kimi / OpenAI / 本地服务 | OpenAI Chat Completions | 填 Base URL 与模型名即可 |
-| Claude (Anthropic) | Anthropic Messages | 协议不同，已内置适配器（`system` 独立字段、`content[0].text`、`x-api-key`、无 `response_format`） |
+| Claude (Anthropic) | Anthropic Messages | 协议不同，已内置适配器 |
 
 本地服务（Ollama / vLLM / LM Studio）在 Web 界面选「自定义（OpenAI 兼容）」，
 Base URL 填例如 `http://127.0.0.1:11434/v1`，密钥可留空。
-
----
-
-## 打包与发布
-
-安装包由 `nfpm` 从同一份模板生成，三种格式共用完全相同的安装路径
-（因此不依赖各发行版的 `python3.X/site-packages`，一个包可在三家通用）：
-
-```bash
-# 本地构建（需要 nfpm：https://github.com/goreleaser/nfpm/releases）
-./packaging/build-packages.sh                    # 版本号取自 pyproject.toml
-VERSION=0.2.0 ./packaging/build-packages.sh      # 或显式指定
-```
-
-产出 `dist/arxiv-daily-report_<版本>-1_amd64.deb`、`*.x86_64.rpm`、`*.pkg.tar.zst`。
-脚本内置自检：**安装包里若混入运行期数据（`state.sqlite3`、`data/raw/`、`reports/`）会直接报错中止**。
-
-发布走 GitHub Actions：
-
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-`.github/workflows/release.yml` 会自动跑测试 → 构建三种包 → 附上 `SHA256SUMS` → 发布到 Release。
-`.github/workflows/ci.yml` 则在每次 push/PR 上跑测试并验证三种包的布局是否正确。
 
 ---
 
@@ -557,7 +540,7 @@ git tag v0.2.0 && git push origin v0.2.0
 - 论文元数据来自 **arXiv API**。元数据以 **CC0 1.0** 发布，可自由存储、转换与分享。
 - 遵守 arXiv 使用条款：**请求间隔可配置（默认 1 秒）**、携带可识别 User-Agent；
   本项目**不下载 PDF 全文**，读全文时抓的是 arXiv 自己生成的 HTML 页面，
-  且每篇只抓一次、结果缓存在本地 sqlite，重复生成报告不会重复请求。
+  且每篇只抓一次、结果缓存在本地，重复生成报告不会重复请求。
   报告中一律链接到 arXiv 摘要页。
 - **建议在配置里填写 `fetch.contact`**（你的邮箱或仓库地址），它会出现在 User-Agent 中，
   便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.2.0 (arXiv API client; you@example.com)`。
@@ -573,32 +556,26 @@ arxiv-daily-report/
 ├── run.py                  CLI 入口（源码方式）
 ├── install.sh              源码安装脚本
 ├── arxiv_daily_report/     核心包
-│   ├── config.py           配置 + XDG/便携目录解析
+│   ├── config.py           配置与目录解析（XDG / 便携）
 │   ├── arxiv_client.py     抓取（限速/重试/分页）
 │   ├── collect.py          采集编排与分类归属
-│   ├── store.py            sqlite 状态（去重/索引/公式缓存/用量）
-│   ├── summarize.py        摘要提示词与校验（防幻觉）
-│   ├── render.py           HTML 版式与字体栈
-│   ├── pdf.py              PDF 后端（WeasyPrint → Chromium 降级）
+│   ├── fulltext.py         抓 arXiv HTML、提取结论/讨论小节
+│   ├── store.py            sqlite 状态（去重/存档/公式缓存/用量）
+│   ├── summarize.py        日报提示词与校验
 │   ├── report_daily.py     日报编排
-│   ├── report_monthly.py   月报 map-reduce
+│   ├── report_monthly.py   月报编排
+│   ├── render.py           HTML 版式与字体
+│   ├── pdf.py              PDF 后端（WeasyPrint → Chromium 降级）
+│   ├── mathrender.py       公式预渲染（MathJax → SVG）
+│   ├── cleanup.py          缓存清理与数据保留
+│   ├── scheduler.py        常驻调度
 │   ├── server.py           Web 后端（标准库 http.server）
 │   └── llm/                多厂商模型适配
 ├── web/                    纯静态配置界面
-├── data/                   arXiv 分类表、主题表（随程序分发）
-├── assets/mathjax/         MathJax 预渲染脚本（可选依赖）
-├── systemd/                systemd 用户服务（systemctl --user，不需要 root）
-│   ├── arxiv-daily-report.service       发行版包用，装到 /usr/lib/systemd/user/
-│   ├── arxiv-daily-report.service.tmpl  源码方式用，路径由下面脚本填充
-│   ├── install-service.sh               源码方式一键安装并启用
-│   └── README.md                        两种用法与常用命令
-├── packaging/
-│   ├── nfpm.yaml.tmpl      deb/rpm/pkg.tar.zst 打包模板
-│   ├── build-packages.sh   构建三种安装包
-│   └── launcher.py         安装包里的 /usr/bin 入口
-├── .github/workflows/      ci.yml（测试+打包校验）、release.yml（发布）、daily.yml（云端生成）
-├── Dockerfile
-└── reports/                产出的 PDF（已 gitignore）
+├── data/                   arXiv 分类表、主题表
+├── systemd/                用户级服务单元与安装脚本
+├── packaging/              安装包构建脚本
+└── reports/                产出的 PDF（源码方式；已 gitignore）
 ```
 
 ---
@@ -609,31 +586,27 @@ arxiv-daily-report/
 combination of arXiv's 155 categories, summarises them with an LLM, and renders a typeset
 **PDF daily digest** plus a **monthly thematic review**.
 
-Highlights:
+How it works:
 
-- Multi-category subscriptions with global de-duplication by arXiv ID (a paper is summarised once
-  and appears in exactly one report).
-- Beijing-time calendar day with a 7-day catch-up window, so delayed weekend/holiday announcements
-  are never lost.
-- PDF with page numbers, running headers, bookmarks and clickable links. **Fonts come from the
-  system**: Latin text uses the system's Latin font, CJK text prefers Source Han Sans (falling back
-  to the system's default Chinese font).
-- **Reads the full text**: fetches arXiv's own HTML, extracts the Conclusion/Discussion section and
-  feeds it to the model together with the abstract, so a note cannot be a mere abstract rewrite.
-  When no HTML exists it honestly degrades to abstract-only.
-- Formula typesetting via MathJax pre-rendered to SVG (same Computer Modern outlines as LaTeX),
-  cached by formula hash.
-- Paper lists (authors, title, arXiv ID, URL) are generated from metadata by code, never by the model.
-- The monthly brief attaches arXiv IDs to important work right after its digest date; every ID is
-  verified against that day's paper list, so invented or mismatched IDs are dropped.
-- Providers: DeepSeek, Kimi, OpenAI, Claude (native Anthropic Messages protocol), and any local
-  OpenAI-compatible endpoint.
-- **Linux-only**, shipped as `.deb`, `.rpm` and `.pkg.tar.zst`, all installing to the same FHS
-  paths (`/usr/lib/arxiv-daily-report`, `/usr/share/arxiv-daily-report`).
-- Follows the XDG base directory spec for user state (`~/.config`, `~/.local/share`, `~/.cache`),
-  with `ADR_HOME` for a fully portable layout.
+1. **Fetch** the subscribed categories for the target day (Beijing calendar day, default:
+   yesterday) with a configurable catch-up window, so delayed weekend/holiday announcements
+   are not lost.
+2. **De-duplicate** globally by arXiv ID — a paper is summarised once and appears in exactly
+   one report.
+3. **Read the full text**: fetch arXiv's own HTML and extract the Conclusion/Discussion section,
+   giving the model both the abstract (problem and method) and the conclusion (final results,
+   validity conditions, numbers). Falls back to abstract-only when no HTML exists.
+4. **Summarise** the day in one model call, producing daily highlights, per-theme notes and a
+   one-line note per paper.
+5. **Render** to PDF with WeasyPrint; formulas are pre-rendered by MathJax to SVG using
+   Computer Modern outlines, and the paper list is generated from metadata by code.
+6. **Archive** the day's notes so the monthly brief can be built from them.
 
-Install:
+The **monthly brief** runs on the 1st, covers the previous calendar month, reads only the stored
+daily notes, and attaches arXiv IDs to important work right after its digest date — every ID is
+verified against that day's paper list.
+
+Install (Linux only):
 
 ```bash
 sudo apt install ./arxiv-daily-report_0.2.0-1_amd64.deb   # or dnf / pacman -U
@@ -642,7 +615,8 @@ arxiv-daily-report serve               # configure the LLM provider in the web U
 systemctl --user enable --now arxiv-daily-report   # auto-start, no root required
 ```
 
-Metadata comes from the arXiv API (CC0) under its
+Final reports land in `~/Documents/arxiv-daily-report/`; configuration, state and cache follow
+the XDG base directory spec. Metadata comes from the arXiv API (CC0) under its
 [Terms of Use](https://info.arxiv.org/help/api/tou.html); this project is not affiliated with arXiv.org.
 
 ---
