@@ -70,7 +70,7 @@ sudo pacman -U ./arxiv-daily-report-0.2.0-1-x86_64.pkg.tar.zst
 ### 方式二：源码检出（可迁移）
 
 ```bash
-git clone <你的仓库地址> arxiv-daily-report
+git clone git@github.com:phys1992/arxiv-daily-report.git
 cd arxiv-daily-report
 ./install.sh                 # 创建 .venv 并安装 WeasyPrint
 # ./install.sh --with-math   # 可选：同时安装 MathJax（公式与 LaTeX 一致）
@@ -132,7 +132,7 @@ sudo pacman -S noto-fonts-cjk                    # Arch
 clone 下来就能跑——**不装任何 Python 包也能出 PDF**（会自动选用 Chromium 后端）：
 
 ```bash
-git clone <你的仓库地址> arxiv-daily-report
+git clone git@github.com:phys1992/arxiv-daily-report.git
 cd arxiv-daily-report
 
 python3 run.py                    # 不带参数：显示用法、界面地址与当前状态

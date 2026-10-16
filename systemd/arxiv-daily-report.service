@@ -6,7 +6,7 @@
 # 定时逻辑在进程内部的调度器里（默认每天 19:00，Asia/Shanghai），
 # 用 Web 界面改时间即时生效，不需要重载本服务。
 Description=arXiv 论文日报（arxiv-daily-report）
-Documentation=https://github.com/
+Documentation=https://github.com/phys1992/arxiv-daily-report
 After=network-online.target
 Wants=network-online.target
 

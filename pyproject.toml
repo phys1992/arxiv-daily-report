@@ -29,7 +29,9 @@ dev = ["ruff>=0.6", "pytest>=8"]
 arxiv-daily-report = "arxiv_daily_report.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/"
+Homepage = "https://github.com/phys1992/arxiv-daily-report"
+Repository = "https://github.com/phys1992/arxiv-daily-report"
+Issues = "https://github.com/phys1992/arxiv-daily-report/issues"
 
 [tool.setuptools]
 packages = ["arxiv_daily_report", "arxiv_daily_report.llm"]
