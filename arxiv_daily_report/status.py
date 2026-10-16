@@ -87,14 +87,14 @@ def next_run_time(cfg: Config) -> str:
         return sched.get("time", "")
 
 
-def _cache_hint(cfg: Config) -> str:
+def _cache_hint(cfg: Config, store: Store | None = None) -> str:
     """缓存占用与清理周期（让用户心里有数）。"""
     from .cleanup import DEFAULT_CLEANUP, cache_usage, interval_days
 
     spec = str(cfg.get("cache", {}).get("cleanup", DEFAULT_CLEANUP))
     days = interval_days(spec)
     try:
-        u = cache_usage(cfg)
+        u = cache_usage(cfg, store)
         size = u["raw_bytes"]
         for unit in ("B", "KB", "MB", "GB"):
             if size < 1024 or unit == "GB":
@@ -106,6 +106,26 @@ def _cache_hint(cfg: Config) -> str:
         used = "?"
     when = "不清理" if days <= 0 else f"每 {days} 天（{spec}）"
     return f"{used}，{when}"
+
+
+def _storage_hint(cfg: Config, store: Store | None = None) -> str:
+    """库容与增长来源，便于判断长期运行会不会撑爆。"""
+    from .cleanup import cache_usage
+
+    def human(n: float) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if n < 1024 or unit == "GB":
+                return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
+            n /= 1024
+        return f"{n:.1f} GB"
+
+    try:
+        u = cache_usage(cfg, store)
+    except Exception:  # noqa: BLE001
+        return "?"
+    return (f"数据库 {human(u['db_bytes'])}（{u['papers']} 篇，"
+            f"其中 {u['papers_with_abstract']} 篇仍存摘要原文 {human(u['abstract_bytes'])}）"
+            f"，缓存 {human(u['raw_bytes'])}")
 
 
 def _fonts() -> dict:
@@ -153,7 +173,8 @@ def render_status(cfg: Config, store: Store) -> str:
         f"  字体            西文 {_fonts()['latin']}",
         f"                  中文 {_fonts()['cjk']}",
         f"  配置界面        {_web_hint(cfg)}",
-        f"  缓存清理        {_cache_hint(cfg)}",
+        f"  缓存清理        {_cache_hint(cfg, store)}",
+        f"  存储占用        {_storage_hint(cfg, store)}",
         "",
         f"  订阅分类        {s['category_count']} 个：{', '.join(s['categories'])}",
         f"  目标报告日      {s['target_day']}",

@@ -1326,6 +1326,96 @@ class CacheCleanupTest(HermeticTestCase):
             finally:
                 store.close()
 
+    def _paper_payload(self, summary="要点", ver=None):
+        import json as _j
+        from arxiv_daily_report.summarize import PROMPT_VERSION
+
+        return _j.dumps({
+            "arxiv_id": "2610.1", "version": 1, "title": "T",
+            "abstract": "A" * 400, "authors": ["X"], "categories": ["gr-qc"],
+            "primary_category": "gr-qc", "announced": "2026-01-05T00:00:00Z",
+            "updated": "2026-01-05T00:00:00Z", "summary": summary, "themes": ["blackhole"],
+            "comment": "", "journal_ref": "", "doi": "", "abs_url": "", "pdf_url": "",
+            "llm_prompt_version": PROMPT_VERSION if ver is None else ver,
+        }, ensure_ascii=False)
+
+    def test_releases_abstracts_only_for_fully_current_days(self):
+        """只有「整天都已是当前版本要点」的日期才释放摘要原文。
+
+        否则重跑那天会把论文再次送进模型，而摘要已经被删掉 -> 空输入。
+        """
+        import datetime as _dt
+        import json as _j
+
+        from arxiv_daily_report.cleanup import release_abstracts
+        from arxiv_daily_report.summarize import PROMPT_VERSION
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            store = Store(tmp / "data" / "state.sqlite3")
+            try:
+                tz = cfg["schedule"]["timezone"]
+                # 两个日期各有日报存档；一个整天是当前版本，一个有一篇是旧版本
+                for day, ver in (("2026-01-05", None), ("2026-01-06", "daily-v1")):
+                    uid = f"2610.{day[-2:]}v1"
+                    store.conn.execute(
+                        "INSERT INTO papers(uid,arxiv_id,version,primary_category,published,"
+                        "updated,day_bj,day_et,payload,summarized,first_seen) "
+                        "VALUES(?,?,1,'gr-qc','2026-01-05','2026-01-05',?,'2026-01-05',?,1,'x')",
+                        (uid, uid.split("v")[0], day, self._paper_payload(ver=ver)))
+                    store.conn.execute(
+                        "INSERT INTO paper_categories(uid,category,is_primary) VALUES(?,'gr-qc',1)",
+                        (uid,))
+                    store.save_day_digest(day, "gr-qc", highlights="h", count=1)
+                store.conn.commit()
+                r = release_abstracts(cfg, store, cutoff=_dt.date(2026, 2, 1),
+                                      progress=lambda m: None)
+                self.assertEqual(r["safe_days"], 1)
+                self.assertEqual(r["released"], 1)
+                # 只有 01-05 的摘要被释放
+                got = {row["day_bj"]: _j.loads(row["payload"])
+                       for row in store.conn.execute("SELECT day_bj,payload FROM papers")}
+                self.assertNotIn("abstract", got["2026-01-05"])
+                self.assertIn("abstract", got["2026-01-06"])
+                # 要点与摘要存档绝不能动
+                self.assertTrue(got["2026-01-05"]["summary"])
+                self.assertIsNotNone(store.get_day_digest("2026-01-05", "gr-qc"))
+            finally:
+                store.close()
+
+    def test_release_skips_days_without_digest(self):
+        import datetime as _dt
+
+        from arxiv_daily_report.cleanup import release_abstracts
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            store = Store(tmp / "data" / "state.sqlite3")
+            try:
+                store.conn.execute(
+                    "INSERT INTO papers(uid,arxiv_id,version,primary_category,published,"
+                    "updated,day_bj,day_et,payload,summarized,first_seen) "
+                    "VALUES('a1','2610.1',1,'gr-qc','2026-01-05','2026-01-05','2026-01-05',"
+                    "'2026-01-05',?,1,'x')", (self._paper_payload(),))
+                store.conn.commit()
+                r = release_abstracts(cfg, store, cutoff=_dt.date(2026, 2, 1),
+                                      progress=lambda m: None)
+                self.assertEqual(r["released"], 0)      # 没有日报存档就不动
+            finally:
+                store.close()
+
+    def test_daily_reuses_stored_summaries(self):
+        """整天都是当前版本要点 + 有存档 -> 不调用模型。"""
+        import inspect
+
+        from arxiv_daily_report import report_daily as _rd
+
+        src = inspect.getsource(_rd.build_category_report)
+        self.assertIn("复用存档，不调用模型", src)
+        self.assertIn("llm_prompt_version", src)
+
     def test_cache_usage_reports_sizes(self):
         from arxiv_daily_report.cleanup import cache_usage
 

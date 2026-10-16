@@ -22,7 +22,7 @@ from .store import Store
 log = logging.getLogger(__name__)
 
 __all__ = ["CLEANUP_OPTIONS", "DEFAULT_CLEANUP", "interval_days", "cleanup_cache",
-           "cache_usage"]
+           "cache_usage", "release_abstracts"]
 
 # 选项 -> 天数（0 表示永不清理）
 CLEANUP_OPTIONS: dict[str, int] = {
@@ -61,7 +61,13 @@ def _older_than(path, cutoff: dt.date) -> bool:
 
 def cache_usage(cfg: Config, store: Store | None = None) -> dict:
     """缓存占用的概览（供 status 展示）。"""
-    out = {"raw_files": 0, "raw_bytes": 0, "math_rows": 0, "fulltext_rows": 0}
+    out = {"raw_files": 0, "raw_bytes": 0, "math_rows": 0, "fulltext_rows": 0,
+           "db_bytes": 0, "papers": 0, "papers_with_abstract": 0, "abstract_bytes": 0}
+    db = cfg.data_dir / "state.sqlite3"
+    try:
+        out["db_bytes"] = db.stat().st_size
+    except OSError:
+        pass
     raw = cfg.raw_cache_dir
     if raw.is_dir():
         for f in raw.rglob("*"):
@@ -77,9 +83,94 @@ def cache_usage(cfg: Config, store: Store | None = None) -> dict:
                 "SELECT COUNT(*) FROM math_cache").fetchone()[0]
             out["fulltext_rows"] = store.conn.execute(
                 "SELECT COUNT(*) FROM fulltext").fetchone()[0]
+            import json as _json
+            for (payload,) in store.conn.execute("SELECT payload FROM papers"):
+                out["papers"] += 1
+                try:
+                    ab = _json.loads(payload).get("abstract") or ""
+                except Exception:  # noqa: BLE001
+                    ab = ""
+                if ab:
+                    out["papers_with_abstract"] += 1
+                    out["abstract_bytes"] += len(ab.encode())
         except Exception:  # noqa: BLE001
             pass
     return out
+
+
+def release_abstracts(cfg: Config, store: Store, *, cutoff: dt.date | None = None,
+                      progress=None, today: dt.date | None = None) -> dict:
+    """释放「已经用不上」的论文摘要原文 —— 它占了库容的七成。
+
+    为什么可以释放：``abstract`` 只在**生成要点**时用得到（渲染 PDF 并不需要它），
+    而且随时能从 arXiv API 重新取回。所以只要满足下面两条，它就等于缓存：
+
+      1. 该论文已经有**当前提示词版本**的要点 —— 重跑这一天会走复用路径，
+         不会再把它送进模型；
+      2. 它所属日期的日报摘要有存档 —— 保证那次重跑确实能复用。
+
+    不满足条件的（要点还是旧版本、当天没跑过、从未总结过）一律保留原文，
+    以免下次总结时没有输入。只改 payload 里的 abstract 字段，其他字段原样保留。
+    """
+    from .summarize import PROMPT_VERSION
+
+    say = progress or (lambda m: log.info("%s", m))
+    today = today or dt.date.today()
+    if cutoff is None:
+        days = interval_days(str(cfg.get("cache", {}).get("cleanup", DEFAULT_CLEANUP)))
+        cutoff = today - dt.timedelta(days=days) if days > 0 else today
+    result = {"released": 0, "bytes": 0, "cutoff": cutoff.isoformat()}
+
+    # 先找出「整天都满足复用条件」的 (日期, 分类)：只有这些天重跑时才会走复用路径，
+    # 不会把论文再送进模型，摘要原文才是真的用不上了。
+    from .summarize import PROMPT_VERSION as PV
+
+    tz = cfg["schedule"].get("timezone", "Asia/Shanghai")
+    policy = cfg.get("crosslist_policy", "primary")
+    safe_days: set[tuple[str, str]] = set()
+    for row in store.conn.execute("SELECT day, category FROM day_digest"):
+        day, cat = row["day"], row["category"]
+        if day >= cutoff.isoformat():
+            continue
+        try:
+            papers = store.papers_for(cat, tz, day, policy=policy)
+        except Exception:  # noqa: BLE001
+            continue
+        if papers and all((p.summary or "").strip() and p.llm_prompt_version == PV
+                          for p in papers):
+            safe_days.add((day, cat))
+    result["safe_days"] = len(safe_days)
+
+    import json as _json
+    updates: list[tuple[str, str]] = []
+    if safe_days:
+        days = sorted({d for d, _c in safe_days})
+        marks = ",".join("?" * len(days))
+        rows = store.conn.execute(
+            f"SELECT uid, payload FROM papers WHERE day_bj IN ({marks})", days
+        ).fetchall()
+        for r in rows:
+            try:
+                d = _json.loads(r["payload"])
+            except Exception:  # noqa: BLE001
+                continue
+            ab = d.get("abstract") or ""
+            if not ab:
+                continue
+            if (d.get("summary") or "").strip() and d.get("llm_prompt_version") == PV:
+                del d["abstract"]
+                updates.append((_json.dumps(d, ensure_ascii=False), r["uid"]))
+                result["released"] += 1
+                result["bytes"] += len(ab.encode())
+    if updates:
+        with store._lock:  # noqa: SLF001 - 同包内复用连接锁
+            store.conn.executemany("UPDATE papers SET payload=? WHERE uid=?", updates)
+            store.conn.commit()
+            store.conn.execute("VACUUM")          # 真正把文件缩回去
+    if result["released"]:
+        say(f"  释放摘要原文：{result['released']} 篇（{_human(result['bytes'])}）"
+            f"—— 这些论文已有当前版本要点，原文可从 arXiv 重新获取")
+    return result
 
 
 def _human(n: int) -> str:
@@ -105,7 +196,8 @@ def cleanup_cache(cfg: Config, store: Store | None = None, *, progress=None,
     spec = str(cfg.get("cache", {}).get("cleanup", DEFAULT_CLEANUP))
     days = interval_days(spec)
     result = {"interval": spec, "days": days, "raw_removed": 0, "raw_bytes": 0,
-              "math_removed": 0, "fulltext_removed": 0, "skipped": False}
+              "math_removed": 0, "fulltext_removed": 0, "abstracts_released": 0,
+              "abstract_bytes": 0, "skipped": False}
 
     if days <= 0:
         result["skipped"] = True
@@ -150,11 +242,24 @@ def cleanup_cache(cfg: Config, store: Store | None = None, *, progress=None,
         except Exception as exc:  # noqa: BLE001
             log.warning("清理数据库缓存失败：%s", exc)
 
-    total = result["raw_removed"] + result["math_removed"] + result["fulltext_removed"]
+    # 3) 论文摘要原文（占了库容七成，但要满足安全条件才释放）
+    if store is not None and not result.get("skipped"):
+        try:
+            rel = release_abstracts(cfg, store, cutoff=cutoff,
+                                    progress=lambda m: log.debug("%s", m))
+            result["abstracts_released"] = rel["released"]
+            result["abstract_bytes"] = rel["bytes"]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("释放摘要原文失败：%s", exc)
+
+    total = (result["raw_removed"] + result["math_removed"]
+             + result["fulltext_removed"] + result.get("abstracts_released", 0))
     if total:
         say(f"  缓存清理（保留最近 {spec}）："
             f"原始 XML {result['raw_removed']} 个（{_human(result['raw_bytes'])}）、"
-            f"公式 {result['math_removed']} 条、全文 {result['fulltext_removed']} 条")
+            f"公式 {result['math_removed']} 条、全文 {result['fulltext_removed']} 条、"
+            f"论文摘要原文 {result.get('abstracts_released', 0)} 篇"
+            f"（{_human(result.get('abstract_bytes', 0))}）")
     else:
         say(f"  缓存清理（保留最近 {spec}）：没有需要清理的内容")
     return result

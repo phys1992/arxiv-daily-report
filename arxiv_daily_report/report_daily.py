@@ -85,10 +85,29 @@ def build_category_report(
 
     highlights, theme_notes, model = "", {}, ""
     bilingual = cfg.get("report_language", "zh") == "zh-en"
+
+    # ---- 复用：这一天的论文都已经有当前版本的要点，就不要再花一次模型钱 ----
+    # 之前 summarized 标志只写不读，导致每次重跑都把全部论文重新送给模型；
+    # 现在按「要点是否存在 + 提示词版本是否一致 + 当天摘要存档是否在」判断。
+    from .summarize import PROMPT_VERSION as _PV
+
+    def _reusable(p) -> bool:
+        return bool((p.summary or "").strip()) and getattr(p, "llm_prompt_version", "") == _PV
+
+    reused = False
+    digest = store.get_day_digest(day, category) if papers else None
+    if use_llm and papers and digest and all(_reusable(p) for p in papers):
+        highlights = str(digest.get("highlights") or "")
+        theme_notes = dict(digest.get("themes") or {})
+        model = str(digest.get("model") or "")
+        reused = True
+        say(f"  {len(papers)} 篇均已有当前版本要点，复用存档，不调用模型"
+            + (f"（{model}）" if model else ""))
+
     # 全文：抓取 arXiv HTML 并提取「结论/讨论」小节，供模型结合摘要一起读
     fulltexts: dict = {}
     ft_stats: dict = {}
-    if use_llm and papers:
+    if use_llm and papers and not reused:
         service = FullTextService(store, cfg, progress=say)
         if service.enabled:
             try:
@@ -115,7 +134,7 @@ def build_category_report(
         else:
             say("  全文抓取已在配置中关闭，仅用摘要")
 
-    if use_llm and papers:
+    if use_llm and papers and not reused:
         client = LLMClient(cfg, store)
         if client.ready:
             say(
