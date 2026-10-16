@@ -791,7 +791,7 @@ def run_monthly(
     else:
         say("  已跳过模型（--no-llm），只出统计版简报")
 
-    for w in font_preflight():
+    for w in font_preflight(cfg):
         say("  字体提醒：" + w)
 
     html_text = render_monthly_html(cfg, data, scope_name=scope)

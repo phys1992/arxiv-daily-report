@@ -191,7 +191,7 @@
     "meta.data": "数据",
     "report.font_family": "正文字体列表",
     "report.font_family_hint": "留空 = 内置栈：西文优先，中文回退到思源黑体",
-    "report.font_family_note": "留空即用内置字体栈；西文走系统西文字体，汉字优先思源黑体。",
+    "report.font_family_note": "留空则用上面的字体方案；填写后完全覆盖（任意 CSS 字体列表）。",
     "report.font_file": "自定义字体文件（可选）",
     "fulltext.enabled": "日报摘要结合论文全文",
     "fulltext.enabled_hint": "抓取 arXiv HTML，读「结论/讨论」小节后与摘要一起交给模型。关掉则只用摘要。",
@@ -201,7 +201,12 @@
     "web.enabled": "常驻时提供配置界面",
     "web.enabled_hint": "常驻服务（daemon）在后台同时提供配置界面。关闭后只能用命令行改配置。访问地址可用 `arxiv-daily-report status` 查看。",
     "web.require_token": "要求访问令牌",
-    "web.require_token_hint": "默认关闭：只监听回环地址时直接打开即可用。打开后必须用「运行状态」里给出的带 ?token= 地址访问。"
+    "web.require_token_hint": "默认关闭：只监听回环地址时直接打开即可用。打开后必须用「运行状态」里给出的带 ?token= 地址访问。",
+    "report.font_preset": "字体方案",
+    "report.font.preset_arxiv": "arXiv 预印本 · Computer Modern + 思源宋体（推荐）",
+    "report.font.preset_journal": "期刊发表版 · Times 系 + 思源宋体",
+    "report.font.preset_sans": "无衬线 · DejaVu Sans + 思源黑体",
+    "report.font_preset_hint": "arXiv 预印本观感用 Computer Modern 西文 + 思源宋体中文；期刊发表版（PRD 等）用 Times 系。缺字体时会自动回退。"
   },
   "en": {
     "app.title": "arXiv Daily Report Settings",
@@ -395,7 +400,7 @@
     "meta.data": "data",
     "report.font_family": "Body font family",
     "report.font_family_hint": "Empty = built-in stack: Latin first, CJK falls back to Source Han Sans",
-    "report.font_family_note": "Empty uses the built-in stack: Latin via system Latin fonts, CJK prefers Source Han Sans.",
+    "report.font_family_note": "Leave empty to use the preset above; a value here overrides it entirely.",
     "report.font_file": "Custom font file (optional)",
     "fulltext.enabled": "Read full text for daily summaries",
     "fulltext.enabled_hint": "Fetch arXiv HTML, read the Conclusion/Discussion section and give it to the model together with the abstract. Off = abstract only.",
@@ -405,6 +410,11 @@
     "web.enabled": "Serve the config UI while running as a daemon",
     "web.enabled_hint": "The daemon also serves the web UI in the background. If disabled, edit the config by hand. Run `arxiv-daily-report status` to get the URL.",
     "web.require_token": "Require an access token",
-    "web.require_token_hint": "Off by default: with a loopback bind you can just open the URL. When on, you must use the ?token= URL shown in Status."
+    "web.require_token_hint": "Off by default: with a loopback bind you can just open the URL. When on, you must use the ?token= URL shown in Status.",
+    "report.font_preset": "Font preset",
+    "report.font.preset_arxiv": "arXiv preprint · Computer Modern + Source Han Serif (recommended)",
+    "report.font.preset_journal": "Journal style · Times-like + Source Han Serif",
+    "report.font.preset_sans": "Sans-serif · DejaVu Sans + Source Han Sans",
+    "report.font_preset_hint": "Use Computer Modern for Latin and Source Han Serif for CJK to match arXiv preprints; the journal style follows published PRD-like articles. Missing fonts fall back automatically."
   }
 }

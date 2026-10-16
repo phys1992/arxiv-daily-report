@@ -184,10 +184,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "timeout_seconds": 30,
     },
     "report": {
-        # 字体由系统提供（不再随仓库分发）。
-        # font_family 留空则用内置默认栈：西文字体在前、中文字体在后；
-        # 逐字符回退 => 英文走西文字体、汉字走中文字体（优先思源黑体）。
-        "font_family": "",
+        # 字体由系统提供（不再随仓库分发）。西文在前、中文在后，
+        # 逐字符回退 => 英文走西文字体、汉字走中文字体。
+        # font_preset: arxiv（默认，Computer Modern + 思源宋体）
+        #            | journal（Times 系 + 思源宋体）
+        #            | sans（DejaVu Sans + 思源黑体）
+        "font_preset": "arxiv",
+        "font_family": "",             # 非空则完全覆盖预设（任意 CSS 字体列表）
         "font_file": "",               # 可选：额外的字体文件，会内联并置于栈首
         "math_backend": "auto",        # auto | mathjax | unicode
         "include_daily_highlights": True,

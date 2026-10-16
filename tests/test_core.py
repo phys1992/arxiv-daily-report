@@ -422,36 +422,105 @@ class ConfigTest(HermeticTestCase):
 
 
 class RenderTest(unittest.TestCase):
-    def test_font_stack_is_latin_first_then_cjk(self):
-        """字体栈顺序决定「英文用西文字体、汉字用中文字体」，不能反过来。"""
-        stack = font_stack()
-        self.assertIn("sans-serif", stack)
-        # 西文族在前
-        self.assertLess(stack.index("DejaVu Sans"), stack.index("Source Han Sans SC"))
-        # 中文字体族都在，且思源黑体优先
-        for fam in ("Source Han Sans SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei",
-                    "Microsoft YaHei"):
-            self.assertIn(fam, stack)
-        self.assertLess(stack.index("Source Han Sans SC"), stack.index("Microsoft YaHei"))
+    def test_default_preset_is_arxiv_fonts(self):
+        """默认西文用 Computer Modern、中文用思源宋体（arXiv 预印本观感）。"""
+        from arxiv_daily_report.render import DEFAULT_PRESET, preset_of
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json")
+            self.assertEqual(DEFAULT_PRESET, "arxiv")
+            self.assertEqual(preset_of(cfg), "arxiv")
+            stack = font_stack(cfg)
+            # 西文族在前、中文族在后（顺序决定「英文走西文、汉字走中文」）
+            self.assertLess(stack.index("Latin Modern Roman"),
+                            stack.index("Source Han Serif SC"))
+            self.assertIn("CMU Serif", stack)
+            self.assertIn("Source Han Serif SC", stack)
+            self.assertIn("Noto Serif CJK SC", stack)
+            self.assertTrue(stack.rstrip().endswith(("serif", "sans-serif")))
+
+    def test_presets_switch_fonts(self):
+        from arxiv_daily_report.render import font_stack, preset_of
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json")
+            cfg.update({"report": {"font_preset": "journal"}})
+            self.assertEqual(preset_of(cfg), "journal")
+            st = font_stack(cfg)
+            self.assertIn("Nimbus Roman", st)          # Times 系
+            self.assertNotIn("Latin Modern Roman", st)
+            self.assertIn("Source Han Serif SC", st)   # 中文仍是宋体
+
+            cfg.update({"report": {"font_preset": "sans"}})
+            st = font_stack(cfg)
+            self.assertIn("DejaVu Sans", st)
+            self.assertIn("Source Han Sans SC", st)
+            self.assertNotIn("Source Han Serif SC", st)
+
+            # 非法值回落到默认
+            cfg.update({"report": {"font_preset": "nonsense"}})
+            self.assertEqual(preset_of(cfg), "arxiv")
 
     def test_font_stack_honours_config_override(self):
         with tempfile.TemporaryDirectory() as td:
             cfg = Config(path=Path(td) / "c.json",
                          overrides={"report": {"font_family": '"My Font", serif'}})
             self.assertEqual(font_stack(cfg), '"My Font", serif')
-            # 留空则回到默认栈
+            # 留空则回到预设
             cfg.update({"report": {"font_family": ""}})
-            self.assertIn("Source Han Sans SC", font_stack(cfg))
+            self.assertIn("Source Han Serif SC", font_stack(cfg))
 
-    def test_font_css_has_no_bundled_fonts(self):
-        """默认不再输出任何 @font-face：字体由系统提供。"""
+    def test_font_plan_falls_back_to_texlive_computer_modern(self):
+        """Computer Modern 常只随 TeX Live 装、未注册进 fontconfig。
+
+        这种情况下应当用 TeX Live 的 OTF 生成 @font-face，而不是直接掉到 Times。
+        """
+        from unittest import mock
+
+        from arxiv_daily_report import render as _r
+
         with tempfile.TemporaryDirectory() as td:
             cfg = Config(path=Path(td) / "c.json")
-            css = font_css(cfg)
-            self.assertNotIn("@font-face", css)
+            fake = {"lmroman10-regular.otf": Path("/usr/share/texmf-dist/fonts/opentype"
+                                                 "/public/lm/lmroman10-regular.otf"),
+                    "lmroman10-bold.otf": Path("/usr/share/texmf-dist/fonts/opentype"
+                                               "/public/lm/lmroman10-bold.otf")}
+            with mock.patch.object(_r, "_family_available", return_value=False), \
+                 mock.patch.object(_r, "_cm_font_files", return_value=fake):
+                faces, stack = _r.font_plan(cfg)
+            self.assertIn('font-family:"ADR Latin"', faces)
+            self.assertIn("lmroman10-regular.otf", faces)
+            self.assertTrue(stack.startswith('"ADR Latin"'))
+
+    def test_font_plan_without_any_cm_falls_back_to_serif(self):
+        """连 TeX Live 都没有时不报错，静默退到 Times 系。"""
+        from unittest import mock
+
+        from arxiv_daily_report import render as _r
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json")
+            with mock.patch.object(_r, "_family_available", return_value=False), \
+                 mock.patch.object(_r, "_cm_font_files", return_value={}):
+                faces, stack = _r.font_plan(cfg)
+            self.assertEqual(faces, "")
+            self.assertIn("Nimbus Roman", stack)          # 预设里的西文回退
+            self.assertIn("Source Han Serif SC", stack)
+
+    def test_font_css_has_no_bundled_fonts(self):
+        """仓库不带字体：默认靠系统字体族名，只有需要时才产生 @font-face。"""
+        from unittest import mock
+
+        from arxiv_daily_report import render as _r
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json")
+            with mock.patch.object(_r, "_family_available", return_value=True):
+                css = font_css(cfg)
+            self.assertNotIn("@font-face", css)            # 系统有 CM 就不内联
             self.assertIn("html{font-family:", css)
             self.assertIn("body{font-family:", css)
-            self.assertIn("Source Han Sans SC", css)
+            self.assertIn("Source Han Serif SC", css)
             # 自定义字体文件才会产生 @font-face
             cfg.update({"report": {"font_file": str(PROJECT / "README.md")}})
             self.assertIn("@font-face", font_css(cfg))
@@ -469,7 +538,7 @@ class RenderTest(unittest.TestCase):
             self.assertIn(box, css)
             segment = css.split(box, 1)[1].split("}", 1)[0]
             self.assertIn("font-family", segment, f"{box} 缺少 font-family")
-        self.assertIn("Source Han Sans SC", css)
+        self.assertIn("Source Han Serif SC", css)
 
     def test_font_preflight_reports_missing_cjk(self):
         """没有中文字体时要给出可操作的告警。"""
@@ -478,21 +547,22 @@ class RenderTest(unittest.TestCase):
         from arxiv_daily_report import render as _r
 
         fake = mock.Mock(return_value=mock.Mock(stdout="", returncode=0))
-        with mock.patch.object(_r, "font_stack", return_value="sans-serif"):
-            with mock.patch("shutil.which", return_value="/usr/bin/fc-list"):
-                with mock.patch("subprocess.run", fake):
-                    warns = font_preflight()
+        with mock.patch("shutil.which", return_value="/usr/bin/fc-list"):
+            with mock.patch("subprocess.run", fake):
+                warns = font_preflight()
         self.assertTrue(warns, "应给出缺少中文字体的告警")
-        self.assertIn("中文字体", warns[0])
+        self.assertTrue(any("中文" in w for w in warns))
 
     def test_font_preflight_silent_when_fonts_present(self):
         from unittest import mock
 
-        fake = mock.Mock(return_value=mock.Mock(
-            stdout="思源黑体\nSource Han Sans SC\nNoto Sans CJK SC\n", returncode=0))
-        with mock.patch("shutil.which", return_value="/usr/bin/fc-list"):
-            with mock.patch("subprocess.run", fake):
-                self.assertEqual(font_preflight(), [])
+        from unittest import mock as _m
+
+        from arxiv_daily_report import render as _r
+
+        # 思源宋体 + Computer Modern 都在 -> 无告警
+        with _m.patch.object(_r, "_family_available", return_value=True):
+            self.assertEqual(font_preflight(), [])
 
     def test_category_and_theme_assets_are_complete(self):
         cats = json.loads((PROJECT / "data/arxiv_categories.json").read_text(encoding="utf-8"))

@@ -87,6 +87,16 @@ def next_run_time(cfg: Config) -> str:
         return sched.get("time", "")
 
 
+def _fonts() -> dict:
+    """当前预设实际会用到的字体（用于状态展示）。"""
+    from .render import resolved_fonts
+
+    try:
+        return resolved_fonts(Config())
+    except Exception:  # noqa: BLE001
+        return {"latin": "?", "cjk": "?"}
+
+
 def _web_hint(cfg: Config) -> str:
     """把「怎么打开 Web 界面」直接写在状态里，省得去翻日志。"""
     from .server import web_url
@@ -119,6 +129,8 @@ def render_status(cfg: Config, store: Store) -> str:
         f"  报告目录        {s['paths']['reports']}",
         f"  发布目录        {s['paths']['publish'] or '（未设置）'}",
         f"  PDF 后端        {', '.join(s['pdf_backends']) or '（无！请安装 WeasyPrint）'}",
+        f"  字体            西文 {_fonts()['latin']}",
+        f"                  中文 {_fonts()['cjk']}",
         f"  配置界面        {_web_hint(cfg)}",
         "",
         f"  订阅分类        {s['category_count']} 个：{', '.join(s['categories'])}",

@@ -24,7 +24,7 @@
 | **仅统计新投稿** | 只收 v1 首次公开，忽略版本更新（可配置） |
 | **北京时间自然日** | 报告日按 `Asia/Shanghai` 自然日切分；自动回溯 7 天，周末/节假日延迟公告也能补录 |
 | **结合全文** | 抓取 arXiv 官方 HTML，读取论文的**结论/讨论/总结**小节原文，与摘要一起交给模型；摘要不能只复述摘要。抓不到全文（老论文等）时如实降级为仅摘要，绝不假装读过 |
-| **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；**字体使用系统字体**——西文用系统西文字体，汉字优先思源黑体、否则用系统默认中文字体 |
+| **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；**默认按 arXiv 预印本排版**——西文与公式用 **Computer Modern**，汉字用 **思源宋体**；缺字体时自动回退并在日志里提示 |
 | **公式排版** | MathJax 预渲染成 SVG（与 LaTeX 输出同一套 Computer Modern 字形），按公式哈希缓存 |
 | **论文清单** | 每篇给出作者、标题、arXiv 号与可点击链接（由代码从元数据生成，模型不参与）；不再单列参考文献表 |
 | **月度简报** | **每月 1 号**（北京时间）自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**不设字数上限**，力求准确的前提下简明扼要；**重要文献在对应日期后附 arXiv 号**（如（10月13日，arXiv:2610.17034）），号逐条核对确属该日，编造或张冠李戴的一律剔除 |
@@ -103,25 +103,63 @@ sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 
 sudo dnf install pango cairo gdk-pixbuf2                                           # Fedora
 sudo pacman -S pango cairo gdk-pixbuf2                                             # Arch
 
-# 3) 中文字体（否则报告里的汉字是方块）
-sudo apt install fonts-noto-cjk                  # Debian/Ubuntu
-sudo dnf install google-noto-sans-cjk-fonts      # Fedora
-sudo pacman -S noto-fonts-cjk                    # Arch
+# 3) 字体（推荐装这两套，缺了会自动回退）
+#    西文/公式：Computer Modern（arXiv 预印本字体）
+sudo apt install fonts-lmodern        # Debian/Ubuntu；Arch: sudo pacman -S otf-latin-modern
+#    中文：思源宋体
+sudo apt install fonts-noto-cjk       # Debian/Ubuntu；Fedora: sudo dnf install google-noto-serif-cjk-fonts
 ```
 
-| 发行版 | WeasyPrint 来源 | 包依赖 |
-|---|---|---|
-| Debian / Ubuntu | `pip install --user weasyprint` | `python3`，建议 `python3-pip` |
-| Fedora / RHEL | `pip install --user weasyprint` | `python3`，建议 `python3-pip` |
-| Arch / Manjaro | `extra/python-weasyprint` | `python`、`python-weasyprint`（自动装上） |
+### 字体：推荐 Computer Modern + 思源宋体
 
-> 若 WeasyPrint 或 pango 缺失，程序会**自动降级到 Chromium 后端**（若已安装 Chromium），
-> 仍能出 PDF，但会失去页码与 PDF 书签，字体也会变成 Type 3。日志里会明确告警。
->
-> 字体选用规则（无需配置）：西文走系统的西文字体（DejaVu Sans / Liberation Sans / Noto Sans 等逐个回退），
-> 汉字**优先思源黑体**（`Source Han Sans SC` / `Noto Sans CJK SC`），其次文泉驿微米黑、微软雅黑、苹方，
-> 最后落到系统默认中文字体。启动时会用 `fc-list` 检查并在缺失时给出上面的安装命令。
-> 想换字体就设 `report.font_family`（任意 CSS 字体列表），或用 `report.font_file` 内联一个字体文件。
+报告默认按 **arXiv 预印本**的样子排版：
+
+| 用途 | 字体 | 说明 |
+|---|---|---|
+| **西文 + 数学** | **Computer Modern**（Latin Modern / CMU） | LaTeX 默认字体，也就是 arXiv 上绝大多数 PDF 的正文与公式 |
+| **中文** | **思源宋体**（Source Han Serif SC / Noto Serif CJK SC） | 宋体是中文科技论文的正文惯例；与 CM 的搭配实测最协调 |
+
+**强烈建议装上这两套**，否则会退到备选字体（见下表），观感会变。
+
+程序启动时会自动检测（`arxiv-daily-report status` 也能看到实际用的是哪套）：
+
+| 情况 | 行为 |
+|---|---|
+| 系统注册了 Latin Modern / CMU | 直接用 |
+| **只装了 TeX Live** | **自动使用 TeX Live 里的 Latin Modern 文件**（`@font-face` 内联），不必再装字体包 |
+| 两者都没有 | 西文退到 Times 系（Nimbus Roman → Liberation Serif → …），日志给出安装命令 |
+| 没有思源宋体 | 中文退到 `Noto Serif CJK SC` → `SimSun` → 系统默认，日志给出安装命令 |
+| 完全没有中文字体 | 汉字会显示为方块，日志明确告警 |
+
+安装命令：
+
+```bash
+# Computer Modern
+sudo apt install fonts-lmodern        # Debian / Ubuntu
+sudo pacman -S otf-latin-modern       # Arch / Manjaro
+sudo dnf install texlive-collection-fontsrecommended   # Fedora（含 Latin Modern）
+
+# 思源宋体
+sudo apt install fonts-noto-cjk        # Debian / Ubuntu
+sudo pacman -S noto-fonts-cjk          # Arch
+sudo dnf install google-noto-serif-cjk-fonts          # Fedora
+```
+
+### 换字体
+
+三种预设，在 Web 界面「报告内容 → 字体方案」里选，或改配置：
+
+| `report.font_preset` | 西文 | 中文 | 适用 |
+|---|---|---|---|
+| `arxiv`（默认） | Computer Modern | 思源宋体 | 对齐 arXiv 预印本 |
+| `journal` | Times 系（Nimbus Roman） | 思源宋体 | 对齐 PRD 等**正式发表版** |
+| `sans` | DejaVu Sans | 思源黑体 | 无衬线，偏文档/幻灯片观感 |
+
+也可以完全自定义：`report.font_family` 填任意 CSS 字体列表（会覆盖预设），
+或用 `report.font_file` 内联一个字体文件。
+
+> **数学字体**：公式由 MathJax 预渲染成 SVG，用的是 **Computer Modern 字形轮廓**——
+> 与 LaTeX 输出一致，无需额外配置。
 
 ---
 
@@ -368,7 +406,8 @@ arxiv-daily-report status                                           # 运行状�
     "timeout_seconds": 30
   },
   "report": {
-    "font_family": "",                  // 空 = 内置字体栈（西文优先 + 中文回退）
+    "font_preset": "arxiv",             // arxiv（CM + 思源宋体）| journal（Times 系）| sans
+    "font_family": "",                  // 非空则完全覆盖预设（任意 CSS 字体列表）
     "font_file": "",                    // 可选：内联一个字体文件
     "math_backend": "auto"              // auto | mathjax | unicode
   },

@@ -58,6 +58,7 @@
     "timeout_seconds": 30
   },
   "report": {
+    "font_preset": "arxiv",
     "font_family": "",
     "font_file": "",
     "math_backend": "auto",

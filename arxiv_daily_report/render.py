@@ -72,43 +72,186 @@ def load_theme_taxonomy(path: Path) -> tuple[dict[str, tuple[str, str]], list[st
 # 顺序规则：西文在前，中文在后。
 #   西文字体列表负责英文/数字/符号；汉字在西文字体里没有字形，会自动回退到中文字体列表。
 #   若把中文字体放前面，英文也会用中文字体的拉丁字形 —— 所以顺序不能反。
-DEFAULT_LATIN_FONTS = (
-    '"DejaVu Sans", "Liberation Sans", "Noto Sans", "Nimbus Sans", '
-    '"Helvetica Neue", Helvetica, Arial'
+# ---------------------------------------------------------------------------
+# 字体预设：西文在前、中文在后（逐字符回退 => 英文走西文、汉字走中文字体）
+# ---------------------------------------------------------------------------
+# Computer Modern：arXiv 预印本的字体（LaTeX 默认）。系统里通常以 Latin Modern
+# 或 CMU 的名字出现；两者都没有时会自动改用 TeX Live 自带的 OTF（见 font_plan）。
+CM_FAMILIES = (
+    '"Latin Modern Roman", "LM Roman 10", "LM Roman 12", "CMU Serif", "Computer Modern"'
 )
-DEFAULT_CJK_FONTS = (
+# 期刊发表版（PRD 等 APS 期刊）用的是 Times 系
+SERIF_FAMILIES = (
+    '"Nimbus Roman", "Liberation Serif", "Times New Roman", "Tinos", "FreeSerif", "DejaVu Serif"'
+)
+SANS_FAMILIES = (
+    '"DejaVu Sans", "Liberation Sans", "Noto Sans", "Nimbus Sans", Helvetica, Arial'
+)
+# 中文：正文优先思源宋体（宋体是中文科技论文的正文惯例）
+CJK_SERIF_FAMILIES = (
+    '"Source Han Serif SC", "Noto Serif CJK SC", "\u601d\u6e90\u5b8b\u4f53", "Songti SC", '
+    '"SimSun", "Noto Serif CJK TC", "AR PL UMing CN"'
+)
+CJK_SANS_FAMILIES = (
     '"Source Han Sans SC", "Noto Sans CJK SC", "Noto Sans SC", "\u601d\u6e90\u9ed1\u4f53", '
-    '"WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Microsoft YaHei", "PingFang SC", '
-    '"SimHei", "AR PL UMing CN"'
+    '"WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Microsoft YaHei", "PingFang SC", "SimHei"'
+)
+
+FONT_PRESETS: dict[str, dict] = {
+    "arxiv": {
+        # Computer Modern 是首选；万一系统里没有，显式退到 Times 系衬线，
+        # 而不是听任浏览器/渲染器自己挑一个 serif。
+        "latin": f"{CM_FAMILIES}, {SERIF_FAMILIES}",
+        "cjk": CJK_SERIF_FAMILIES, "generic": "serif",
+        "zh": "arXiv 预印本风格（Computer Modern + 思源宋体）",
+        "en": "arXiv preprint (Computer Modern + Source Han Serif)",
+    },
+    "journal": {
+        "latin": SERIF_FAMILIES, "cjk": CJK_SERIF_FAMILIES, "generic": "serif",
+        "zh": "期刊发表版风格（Times 系 + 思源宋体）",
+        "en": "Journal style (Times-like + Source Han Serif)",
+    },
+    "sans": {
+        "latin": SANS_FAMILIES, "cjk": CJK_SANS_FAMILIES, "generic": "sans-serif",
+        "zh": "无衬线（DejaVu Sans + 思源黑体）",
+        "en": "Sans-serif (DejaVu Sans + Source Han Sans)",
+    },
+}
+DEFAULT_PRESET = "arxiv"
+
+# TeX Live 里 Latin Modern 的常见位置（kpsewhich 不可用时的兜底）
+_CM_DIRS = (
+    "/usr/share/texmf-dist/fonts/opentype/public/lm",
+    "/usr/local/texlive",
+)
+_CM_FACES = (
+    ("lmroman10-regular.otf", 400, "normal"),
+    ("lmroman10-bold.otf", 700, "normal"),
+    ("lmroman10-italic.otf", 400, "italic"),
+    ("lmroman10-bolditalic.otf", 700, "italic"),
 )
 
 
-def font_stack(cfg=None) -> str:
-    """正文字体栈（西文优先 + 中文回退 + 系统兜底）。"""
-    if cfg is not None:
-        custom = (cfg["report"].get("font_family") or "").strip()
-        if custom:
-            return custom
-    return f"{DEFAULT_LATIN_FONTS}, {DEFAULT_CJK_FONTS}, sans-serif"
+def preset_of(cfg=None) -> str:
+    if cfg is None:
+        return DEFAULT_PRESET
+    name = str(cfg["report"].get("font_preset") or "").strip()
+    return name if name in FONT_PRESETS else DEFAULT_PRESET
 
 
-def font_css(cfg) -> str:
-    """生成字体相关 CSS。
+def _family_available(name: str) -> bool:
+    """某个字体族是否真的装在系统里（fc-match 总会返回东西，所以要严格比对）。"""
+    import shutil as _shutil
+    import subprocess as _sp
 
-    默认不产生任何 @font-face：中英文字体都交给系统提供（见 README 的字体要求）。
-    只有在用户显式配置了 font_file 时才把它内联进来并置于栈首。
+    if not _shutil.which("fc-match"):
+        return False
+    try:
+        out = _sp.run(["fc-match", "--format=%{family}", name],
+                      capture_output=True, text=True, timeout=10).stdout
+    except Exception:  # noqa: BLE001
+        return False
+    return any(part.strip().lower() == name.lower() for part in out.split(","))
+
+
+def _cm_font_files() -> dict[str, Path]:
+    """TeX Live 里的 Latin Modern OTF；找不到就返回空。
+
+    Computer Modern 常常只随 TeX Live 安装，并没有注册进 fontconfig，
+    因此族名匹配不到。这时直接用文件走 @font-face，免去用户再装字体包。
+    """
+    import shutil as _shutil
+    import subprocess as _sp
+
+    found: dict[str, Path] = {}
+    kpse = _shutil.which("kpsewhich")
+    for fname, _w, _st in _CM_FACES:
+        p: Path | None = None
+        if kpse:
+            try:
+                r = _sp.run([kpse, fname], capture_output=True, text=True, timeout=10).stdout.strip()
+                if r and Path(r).exists():
+                    p = Path(r)
+            except Exception:  # noqa: BLE001
+                p = None
+        if p is None:
+            for base in _CM_DIRS:
+                cand = sorted(Path(base).glob(f"**/{fname}"), reverse=True)[:1]
+                if cand:
+                    p = cand[0]
+                    break
+        if p is not None:
+            found[fname] = p
+    return found
+
+
+def cm_route() -> tuple[str, str]:
+    """Computer Modern 从哪来：("system"|"texlive"|"none", 说明)。"""
+    for name in ("Latin Modern Roman", "CMU Serif"):
+        if _family_available(name):
+            return "system", name
+    files = _cm_font_files()
+    if files:
+        return "texlive", Path(next(iter(files.values()))).name
+    return "none", ""
+
+
+def font_plan(cfg) -> tuple[str, str]:
+    """算出（@font-face CSS, 字体栈）。
+
+    优先级：
+      1. report.font_file —— 用户显式指定的字体文件，内联并置于栈首；
+      2. 预设为 arxiv 但系统没有 Computer Modern —— 用 TeX Live 的 Latin Modern
+         OTF 生成 @font-face（族名 ADR Latin），仍然吃到 CM；
+      3. 其余情况——只用系统字体族名。
     """
     faces: list[str] = []
+    prefix = ""
     custom = resolve_font_file(cfg)
-    family = '"ADR Custom"'
     if custom is not None:
         fmt = "truetype" if custom.suffix.lower() in (".ttf", ".ttc") else "opentype"
         faces.append(
-            f'@font-face{{font-family:{family};src:url("{custom.as_uri()}") format("{fmt}");}}'
+            f'@font-face{{font-family:"ADR Custom";src:url("{custom.as_uri()}") format("{fmt}");}}'
         )
-    stack = f"{family}, {font_stack(cfg)}" if faces else font_stack(cfg)
+        prefix = '"ADR Custom", '
+    elif preset_of(cfg) == "arxiv" and cm_route()[0] == "texlive":
+        files = _cm_font_files()
+        for fname, weight, style in _CM_FACES:
+            p = files.get(fname)
+            if p is None:
+                continue
+            faces.append(
+                f'@font-face{{font-family:"ADR Latin";src:url("{p.as_uri()}") '
+                f'format("opentype");font-weight:{weight};font-style:{style};}}'
+            )
+        if faces:
+            prefix = '"ADR Latin", '
+            log.debug("Computer Modern 未注册，改用 TeX Live 的 Latin Modern 文件")
+    spec = FONT_PRESETS[preset_of(cfg)]
+    stack = f"{prefix}{spec['latin']}, {spec['cjk']}, {spec['generic']}"
+    return "\n".join(faces), stack
+
+
+def font_stack(cfg=None) -> str:
+    """正文字体栈（西文优先 + 中文回退 + 通用兜底）。"""
+    if cfg is None:
+        spec = FONT_PRESETS[DEFAULT_PRESET]
+        return f"{spec['latin']}, {spec['cjk']}, {spec['generic']}"
+    custom = (cfg["report"].get("font_family") or "").strip()
+    if custom:
+        return custom
+    return font_plan(cfg)[1]
+
+
+def font_css(cfg) -> str:
+    """生成字体相关 CSS：@font-face（按需）+ html/body 的字体栈。"""
+    faces, stack = font_plan(cfg)
+    custom = (cfg["report"].get("font_family") or "").strip()
+    if custom:
+        stack = custom
     # html 与 body 都要声明：@page 的页眉页脚不继承 body 的字体
-    return "\n".join(faces) + f"\nhtml{{font-family:{stack};}}\nbody{{font-family:{stack};}}"
+    body = f"\nhtml{{font-family:{stack};}}\nbody{{font-family:{stack};}}"
+    return (faces + body) if faces else body
 
 
 def resolve_font_file(cfg) -> Path | None:
@@ -123,38 +266,80 @@ def resolve_font_file(cfg) -> Path | None:
     return p
 
 
-def font_preflight() -> list[str]:
-    """检查系统字体是否够用，返回告警列表（不阻断出报告）。
+def resolved_fonts(cfg) -> dict[str, str]:
+    """报告实际会用的西文/中文字体（用于状态展示与启动日志）。"""
+    spec = FONT_PRESETS[preset_of(cfg)]
+    custom = (cfg["report"].get("font_family") or "").strip()
 
-    以前是逐字符比对随仓库分发的字体 cmap；现在字体由系统提供，
-    改为向 fontconfig 询问：系统到底有没有中文字体。
+    def pick(families: str) -> str:
+        for raw in families.split(","):
+            name = raw.strip().strip('"')
+            if not name or name in ("serif", "sans-serif"):
+                continue
+            if _family_available(name):
+                return name
+        return "（未找到，用系统默认）"
+
+    if custom:
+        return {"latin": custom, "cjk": custom, "source": "custom"}
+    source = "system"
+    latin = ""
+    if preset_of(cfg) == "arxiv":
+        how, detail = cm_route()
+        if how == "system":
+            latin = detail
+        elif how == "texlive":
+            latin = f"Computer Modern（TeX Live 文件：{detail}）"
+            source = "texlive"
+    if not latin:
+        latin = pick(spec["latin"])
+    return {"latin": latin, "cjk": pick(spec["cjk"]), "source": source}
+
+
+def font_preflight(cfg=None) -> list[str]:
+    """检查字体是否齐备，返回可操作的告警（不阻断出报告）。
+
+    检查两项：西文（预设为 arxiv 时要求 Computer Modern）与中文（要求思源宋体）。
     """
     import shutil as _shutil
-    import subprocess as _sp
 
     warnings: list[str] = []
-    if not _shutil.which("fc-list"):
+    if not _shutil.which("fc-match"):
         return warnings                       # 没有 fontconfig 就跳过检查
-    try:
-        out = _sp.run(["fc-list", ":lang=zh-cn", "family"],
-                      capture_output=True, text=True, timeout=20).stdout.strip()
-    except Exception:  # noqa: BLE001
-        return warnings
-    if not out:
-        warnings.append(
-            "系统没有检测到任何中文字体，报告里的汉字会显示为方块。"
-            "请安装中文字体，例如 Debian/Ubuntu：sudo apt install fonts-noto-cjk；"
-            "Fedora：sudo dnf install google-noto-sans-cjk-fonts。"
-        )
-        return warnings
-    flat = out.lower()
-    if "source han" not in flat and "\u601d\u6e90" not in flat:
-        warnings.append(
-            "未检测到思源黑体，将使用系统默认中文字体（可正常显示，字形风格可能不同）。"
-            "安装思源黑体可得到稳定一致的排版：sudo apt install fonts-noto-cjk"
-        )
-    return warnings
+    preset = preset_of(cfg)
+    spec = FONT_PRESETS[preset]
 
+    # ---- 中文 ----
+    if _family_available("Source Han Serif SC") or _family_available("Noto Serif CJK SC"):
+        pass
+    elif _family_available("SimSun"):
+        warnings.append(
+            "未检测到思源宋体，中文将回退到系统宋体（SimSun）。"
+            "推荐安装思源宋体以获得稳定排版："
+            "Debian/Ubuntu 执行 sudo apt install fonts-noto-cjk；"
+            "Fedora 执行 sudo dnf install google-noto-serif-cjk-fonts。"
+        )
+    else:
+        warnings.append(
+            "系统没有检测到中文字体，报告里的汉字会显示为方块。"
+            "请安装中文字体，例如 sudo apt install fonts-noto-cjk。"
+        )
+
+    # ---- 西文 ----
+    if preset == "arxiv":
+        how, _detail = cm_route()
+        if how == "system":
+            pass
+        elif how == "texlive":
+            log.info("Computer Modern 未注册进 fontconfig，已改用 TeX Live 里的 Latin Modern 文件")
+        else:
+            warnings.append(
+                "未检测到 Computer Modern / Latin Modern，西文将回退到 Times 系衬线。"
+                "推荐安装：Debian/Ubuntu 执行 sudo apt install fonts-lmodern；"
+                "Arch 执行 sudo pacman -S otf-latin-modern；"
+                "或安装 TeX Live（含 Latin Modern，程序会自动使用）。"
+            )
+    return warnings
 
 
 def base_css(header_text: str, footer_text: str = "", stack: str | None = None) -> str:

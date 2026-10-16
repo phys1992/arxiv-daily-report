@@ -148,7 +148,7 @@ def build_category_report(
     math.prepare([p.title for p in papers] + [p.summary for p in papers])
 
     # 字体预检：字体由系统提供，这里只提醒「系统有没有中文字体」
-    for w in font_preflight():
+    for w in font_preflight(cfg):
         say("  字体提醒：" + w)
 
     # 存档当日要点与主题综述（外加每个主题的篇数）：月报只读这些日报摘要
