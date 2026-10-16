@@ -3,7 +3,12 @@ config.json
 secrets.json
 
 # ---- 运行期数据与产物 ----
-data/
+# 注意：data/ 里既有运行期数据（state.sqlite3、raw/），也有随程序分发的资产
+# （分类表、主题表）。不能整个目录忽略，否则资产不会入库，
+# CI 检出后就缺文件、打出来的包也是坏的。
+data/*
+!data/arxiv_categories.json
+!data/theme_taxonomy.json
 reports/
 logs/
 *.sqlite3

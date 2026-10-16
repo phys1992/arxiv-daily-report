@@ -92,45 +92,65 @@ def documents_dir() -> Path:
     """最终报告的默认位置：用户的「文档」目录下的一个子文件夹。
 
     安装包形态下用户只需要知道报告在哪；过程中产生的数据都在 cache/state 里。
-    顺序：XDG_DOCUMENTS_DIR 环境变量 -> xdg-user-dir DOCUMENTS
-          -> ~/.config/user-dirs.dirs -> ~/Documents
+    想指定别处请用 ``paths.reports``，不要靠环境变量。
+
+    解析顺序（越靠前越是显式配置）：
+      1. ``XDG_DOCUMENTS_DIR`` 环境变量
+      2. ``~/.config/user-dirs.dirs`` 里的 ``XDG_DOCUMENTS_DIR``
+      3. ``xdg-user-dir DOCUMENTS``
+      4. ``~/Documents``
+
+    这里有个容易踩的坑：**``$HOME`` 这个值其实表示「没配置」**。
+    没有 user-dirs.dirs 时 ``xdg-user-dir`` 会直接回退成 ``$HOME``；
+    而默认模板里写的也是 ``XDG_DOCUMENTS_DIR="$HOME/"``。
+    照单全收的话报告就会落在家的根目录下，所以凡是解析结果等于 ``$HOME`` 的，
+    一律当作没配置，继续回退到 ``~/Documents``。
     """
     import os as _os
     import shutil as _shutil
     import subprocess as _sp
 
+    home = Path.home()
     base: Path | None = None
-    env = _os.environ.get("XDG_DOCUMENTS_DIR", "").strip()
-    if env:
-        base = Path(env.replace("$HOME", str(Path.home()))).expanduser()
+
+    def _usable(raw: str) -> Path | None:
+        """把配置里的写法变成绝对路径；不是绝对路径就当没配置。"""
+        if not raw:
+            return None
+        p = Path(raw.replace("$HOME", str(home))).expanduser()
+        return p if p.is_absolute() else None
+
+    # 1) 环境变量
+    base = _usable(_os.environ.get("XDG_DOCUMENTS_DIR", "").strip())
+
+    # 2) user-dirs.dirs
+    if base is None:
+        try:
+            for line in (home / ".config" / "user-dirs.dirs").read_text(
+                    encoding="utf-8").splitlines():
+                if line.strip().startswith("XDG_DOCUMENTS_DIR"):
+                    base = _usable(line.split("=", 1)[1].strip().strip('"'))
+                    break
+        except Exception:  # noqa: BLE001
+            base = None
+
+    # 3) xdg-user-dir 命令
     if base is None and _shutil.which("xdg-user-dir"):
         try:
             out = _sp.run(["xdg-user-dir", "DOCUMENTS"], capture_output=True,
                           text=True, timeout=10).stdout.strip()
-            if out and Path(out).is_absolute():
-                base = Path(out)
+            base = _usable(out)
         except Exception:  # noqa: BLE001
             base = None
-    if base is None:
-        cfgfile = Path.home() / ".config" / "user-dirs.dirs"
-        try:
-            for line in cfgfile.read_text(encoding="utf-8").splitlines():
-                if line.strip().startswith("XDG_DOCUMENTS_DIR"):
-                    raw = line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(Path.home()))
-                    if raw:
-                        base = Path(raw)
-                    break
-        except Exception:  # noqa: BLE001
-            base = None
-    if base is None or not base.is_absolute():
-        base = Path.home() / "Documents"
+
+    # 4) 兜底；$HOME 一律视为未配置
+    if base is None or base == home:
+        base = home / "Documents"
     return (base / APP_NAME).resolve()
-
-
 def cache_dir() -> Path:
     """缓存目录（用户随时可以删）：…/cache 或 ~/.cache/arxiv-daily-report。
 
-    只放可再生的中间数据（arXiv 原始 XML、公式缓存、全文摘录），
+    只放可再生的中间数据（arXiv 原始响应、公式缓存、全文摘录），
     定期清理也只动这里，清掉不影响最终报告。
     """
     return _resolve_dir("ADR_CACHE_HOME", "XDG_CACHE_HOME", ".cache", "cache")

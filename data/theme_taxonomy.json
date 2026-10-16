@@ -1,0 +1,84 @@
+{
+  "_comment": "固定主题分类表。跨月可比的前提是主题集合稳定，因此模型只能在表内选择。",
+  "version": 1,
+  "themes": [
+    {
+      "code": "blackhole",
+      "zh": "黑洞物理与准正规模",
+      "en": "Black Holes & Quasinormal Modes",
+      "keywords": ["black hole", "kerr", "schwarzschild", "quasinormal", "ringdown", "horizon", "accretion", "ergosphere", "shadow", "teukolsky"]
+    },
+    {
+      "code": "gravitational_waves",
+      "zh": "引力波与数值相对论",
+      "en": "Gravitational Waves & Numerical Relativity",
+      "keywords": ["gravitational wave", "ligo", "virgo", "kagra", "inspiral", "merger", "waveform", "numerical relativity", "template", "matched filter", "eccentric", "precession"]
+    },
+    {
+      "code": "quantum_gravity",
+      "zh": "量子引力与引力量子化",
+      "en": "Quantum Gravity",
+      "keywords": ["quantum gravity", "loop quantum", "spin foam", "causal dynamical", "asymptotic safety", "string", "planck", "Wheeler", "group field", "causal set"]
+    },
+    {
+      "code": "cosmology",
+      "zh": "宇宙学与暗能量",
+      "en": "Cosmology & Dark Energy",
+      "keywords": ["cosmolog", "dark energy", "dark matter", "inflation", "CMB", "cosmic microwave", "lambda cdm", "hubble", "baryon acoustic", "primordial", "reheating"]
+    },
+    {
+      "code": "modified_gravity",
+      "zh": "修改引力与标量张量",
+      "en": "Modified Gravity & Scalar-Tensor",
+      "keywords": ["modified gravity", "f(R)", "scalar-tensor", "brans", "horndeski", "galileon", "teleparallel", "higher derivative", "gauss-bonnet", "massive gravity"]
+    },
+    {
+      "code": "holography",
+      "zh": "全息对偶与纠缠熵",
+      "en": "Holography & Entanglement",
+      "keywords": ["holograph", "AdS/CFT", "gauge/gravity", "entanglement entropy", "ryu", "conformal field", "bulk", "holographic"]
+    },
+    {
+      "code": "qft_curved",
+      "zh": "弯曲时空量子场论",
+      "en": "QFT in Curved Spacetime",
+      "keywords": ["curved spacetime", "hawking radiation", "unruh", "vacuum polarization", "renormaliz", "stress-energy tensor", "semiclassical", "particle creation"]
+    },
+    {
+      "code": "spacetime_structure",
+      "zh": "时空结构与奇点",
+      "en": "Spacetime Structure & Singularities",
+      "keywords": ["singularity", "causal", "wormhole", "traversable", "geodesic", "penrose", "energy condition", "topology", "causal structure", "closed timelike"]
+    },
+    {
+      "code": "experiment",
+      "zh": "引力实验与检验",
+      "en": "Gravitational Experiments & Tests",
+      "keywords": ["equivalence principle", "precision test", "torsion balance", "atomic clock", "fifth force", "gravitational constant", "G measurement", "fundamental physics"]
+    },
+    {
+      "code": "compact_objects",
+      "zh": "致密星与核天体",
+      "en": "Compact Objects & Nuclear Astrophysics",
+      "keywords": ["neutron star", "equation of state", "quark star", "white dwarf", "pulsar", "tidal deformability", "magnetar", "boson star", "strange star"]
+    },
+    {
+      "code": "lensing_observation",
+      "zh": "引力透镜与天文观测",
+      "en": "Lensing & Astronomical Observation",
+      "keywords": ["lensing", "microlensing", "photon ring", "EHT", "event horizon telescope", "imaging", "galactic center", "Sgr A", "observation"]
+    },
+    {
+      "code": "mathematical",
+      "zh": "数学方法与形式理论",
+      "en": "Mathematical Methods & Formal Theory",
+      "keywords": ["formal", "differential geometry", "initial value", "constraint", "exact solution", "symmetry", "algebraic classification", "petrov"]
+    },
+    {
+      "code": "other",
+      "zh": "其他",
+      "en": "Other",
+      "keywords": []
+    }
+  ]
+}

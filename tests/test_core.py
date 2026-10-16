@@ -1466,6 +1466,38 @@ class StorageLayoutTest(HermeticTestCase):
             with mock.patch.dict(_cfg.os.environ, {"XDG_DOCUMENTS_DIR": td}):
                 self.assertEqual(_cfg.documents_dir(), Path(td) / _cfg.APP_NAME)
 
+    def test_documents_dir_ignores_home_fallback(self):
+        """$HOME 这个值表示「没配置」。
+
+        没有 user-dirs.dirs 时 xdg-user-dir 会直接回退成 $HOME，
+        默认模板写的也是 XDG_DOCUMENTS_DIR="$HOME/"。
+        要是照单全收，报告就会落在家的根目录下。
+        """
+        from unittest import mock
+
+        from arxiv_daily_report import config as _cfg
+
+        fake_home = Path("/tmp/fakehome-for-test")
+        rendered = [{"out": ""}, {"out": str(fake_home)}, {"out": str(fake_home / "文档")}]
+        for case in rendered:
+            def fake_run(*_a, **_k):
+                return mock.Mock(stdout=case["out"], returncode=0)
+
+            def fake_read(self, *_a, **_k):
+                raise FileNotFoundError(self)
+
+            with mock.patch.object(_cfg.Path, "home", return_value=fake_home), \
+                 mock.patch.object(_cfg.Path, "read_text", fake_read), \
+                 mock.patch("subprocess.run", fake_run), \
+                 mock.patch("shutil.which", return_value="/usr/bin/xdg-user-dir"), \
+                 mock.patch.dict(_cfg.os.environ, {}, clear=False):
+                _cfg.os.environ.pop("XDG_DOCUMENTS_DIR", None)
+                got = _cfg.documents_dir()
+            if case["out"] in ("", str(fake_home)):
+                self.assertEqual(got, fake_home / "Documents" / _cfg.APP_NAME)
+            else:
+                self.assertEqual(got, fake_home / "文档" / _cfg.APP_NAME)
+
     def test_portable_layout_keeps_everything_in_project(self):
         from unittest import mock
 
@@ -1494,6 +1526,50 @@ class StorageLayoutTest(HermeticTestCase):
                                               "reports": str(tmp / "reports")}})
             self.assertEqual(cfg.raw_cache_dir, tmp / "cache" / "raw")
             self.assertNotIn("data", str(cfg.raw_cache_dir))
+
+
+class RepoHygieneTest(HermeticTestCase):
+    """仓库卫生：随程序分发的资产必须真的入库。
+
+    回归背景：.gitignore 里曾写着 ``data/``，把整个目录忽略了，
+    于是分类表与主题表从未被提交——本地跑测试没事（工作区有文件），
+    CI 检出后却缺文件，打出来的包也是坏的。
+    """
+
+    ASSETS = ("data/arxiv_categories.json", "data/theme_taxonomy.json")
+
+    def test_data_assets_are_not_ignored(self):
+        import subprocess
+
+        if not (PROJECT / ".git").exists():
+            self.skipTest("不是 git 工作区")
+        for rel in self.ASSETS:
+            r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=PROJECT)
+            self.assertNotEqual(r.returncode, 0, f"{rel} 被 .gitignore 忽略了，CI 检出后会缺文件")
+
+    def test_data_assets_are_tracked(self):
+        import subprocess
+
+        if not (PROJECT / ".git").exists():
+            self.skipTest("不是 git 工作区")
+        for rel in self.ASSETS:
+            r = subprocess.run(["git", "ls-files", "--error-unmatch", rel],
+                               cwd=PROJECT, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f"{rel} 没有被 git 跟踪")
+
+    def test_runtime_state_is_still_ignored(self):
+        """别修过头：运行期的数据库不能被提交。"""
+        import subprocess
+
+        if not (PROJECT / ".git").exists():
+            self.skipTest("不是 git 工作区")
+        r = subprocess.run(["git", "check-ignore", "-q", "data/state.sqlite3"], cwd=PROJECT)
+        self.assertEqual(r.returncode, 0, "state.sqlite3 必须继续被忽略")
+
+    def test_packaged_assets_come_from_the_repo(self):
+        """校验脚本要求的资产，必须在工作区里真实存在。"""
+        for rel in self.ASSETS:
+            self.assertTrue((PROJECT / rel).is_file(), f"{rel} 缺失")
 
 
 class PackageVerifierTest(HermeticTestCase):
