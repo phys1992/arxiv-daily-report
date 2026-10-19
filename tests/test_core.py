@@ -1581,6 +1581,141 @@ class RepoHygieneTest(HermeticTestCase):
             self.assertTrue((PROJECT / rel).is_file(), f"{rel} 缺失")
 
 
+class BackfillTest(HermeticTestCase):
+    """补缺：运行时检查当月已生成的报告，把「有论文但没出报告」的日期补上。"""
+
+    def _setup(self, td: Path):
+        cfg = Config(path=td / "c.json", overrides={
+            "schedule": {"timezone": "Asia/Shanghai", "backfill_days": 31,
+                         "backfill_max_per_run": 2, "catch_up_days": 7},
+            "subscriptions": [{"category": "gr-qc", "enabled": True,
+                               "report_name": "", "out_dir": ""}],
+            "paths": {"data": str(td / "d"), "cache": str(td / "k"),
+                      "reports": str(td / "r")}})
+        store = Store(td / "d" / "state.sqlite3")
+        return cfg, store
+
+    @staticmethod
+    def _add(store, day: str, n: int = 1):
+        from arxiv_daily_report.models import Paper
+
+        for i in range(n):
+            paper = make_paper(aid=f"2610.{abs(hash(day)) % 1000}{i}")
+            paper.updated = f"{day}T02:00:00Z"
+            paper.published = paper.updated
+            store.add_paper(paper, {"gr-qc": True})
+
+    def test_detects_days_with_papers_but_no_report(self):
+        from arxiv_daily_report.report_daily import missing_days
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                store.kv_set("first_run_day", "2026-10-10")
+                for day in ("2026-10-10", "2026-10-11", "2026-10-12"):
+                    self._add(store, day)
+                store.record_report("2026-10-10", "gr-qc", "/r/a.pdf", 1)
+                store.record_report("2026-10-12", "gr-qc", "/r/b.pdf", 1)
+                got = missing_days(cfg, store, today="2026-10-15")
+                self.assertEqual(got, [("2026-10-11", "gr-qc")])
+            finally:
+                store.close()
+
+    def test_days_without_papers_are_not_missing(self):
+        """周末/节假日没有论文是正常的，不能当成遗漏去补。"""
+        from arxiv_daily_report.report_daily import missing_days
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                store.kv_set("first_run_day", "2026-10-10")
+                self._add(store, "2026-10-10")
+                got = missing_days(cfg, store, today="2026-10-15")
+                self.assertEqual(got, [("2026-10-10", "gr-qc")])
+                # 10-11 ~ 10-14 都没有论文，不应出现
+                self.assertNotIn("2026-10-11", [d for d, _c in got])
+            finally:
+                store.close()
+
+    def test_today_is_not_backfilled(self):
+        from arxiv_daily_report.report_daily import missing_days
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                store.kv_set("first_run_day", "2026-10-12")
+                self._add(store, "2026-10-12")
+                self._add(store, "2026-10-13")
+                got = missing_days(cfg, store, today="2026-10-13")
+                self.assertEqual(got, [("2026-10-12", "gr-qc")])
+            finally:
+                store.close()
+
+    def test_backfill_respects_per_run_cap(self):
+        from arxiv_daily_report.report_daily import backfill_missing
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg, store = self._setup(tmp)
+            try:
+                store.kv_set("first_run_day", "2026-10-10")
+                for day in ("2026-10-10", "2026-10-11", "2026-10-12"):
+                    self._add(store, day)
+                # 单次上限 2 天 -> 只补最早两天
+                out = backfill_missing(cfg, store, use_llm=False,
+                                      progress=lambda m: None, limit=2)
+                self.assertEqual(len(out), 2)
+                self.assertTrue(store.report_exists("2026-10-10", "gr-qc"))
+                self.assertTrue(store.report_exists("2026-10-11", "gr-qc"))
+                self.assertFalse(store.report_exists("2026-10-12", "gr-qc"))
+            finally:
+                store.close()
+
+    def test_backfill_is_idempotent(self):
+        """已经补齐后再跑一次不应重复生成。"""
+        from arxiv_daily_report.report_daily import backfill_missing
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                store.kv_set("first_run_day", "2026-10-10")
+                self._add(store, "2026-10-10")
+                backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
+                again = backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
+                self.assertEqual(again, [])
+            finally:
+                store.close()
+
+    def test_fresh_install_does_not_backfill_history(self):
+        """刚装上还没有任何报告时，不能凭空刷出一整月的历史报告。"""
+        from arxiv_daily_report.report_daily import missing_days
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                for day in ("2026-10-10", "2026-10-11", "2026-10-12"):
+                    self._add(store, day)
+                # 没有 first_run_day、也没有任何历史报告
+                self.assertEqual(missing_days(cfg, store, today="2026-10-15"), [])
+            finally:
+                store.close()
+
+    def test_adaptive_lookback_grows_after_downtime(self):
+        """停机期间错过的日期要真的去抓，否则没有数据可补。"""
+        from arxiv_daily_report.report_daily import _auto_lookback
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                self.assertEqual(_auto_lookback(cfg, store, "2026-10-19"), 7)
+                store.kv_set("last_success_day", "2026-10-10")
+                self.assertEqual(_auto_lookback(cfg, store, "2026-10-19"), 10)
+                store.kv_set("last_success_day", "2026-08-01")
+                self.assertEqual(_auto_lookback(cfg, store, "2026-10-19"), 31)
+            finally:
+                store.close()
+
+
 class WebControlTest(HermeticTestCase):
     """设置界面的控件形态。
 

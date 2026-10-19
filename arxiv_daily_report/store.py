@@ -411,6 +411,28 @@ class Store:
             self.conn.commit()
             return rev
 
+    def report_exists(self, day: str, category: str, kind: str = "daily") -> bool:
+        """该日该分类是否已经生成过报告（用于补缺失的日期）。"""
+        return self.conn.execute(
+            "SELECT 1 FROM reports WHERE day=? AND category=? AND kind=?",
+            (day, category, kind),
+        ).fetchone() is not None
+
+    def reported_days(self, category: str, start: str, end: str,
+                      kind: str = "daily") -> set[str]:
+        """[start, end) 区间内已生成报告的日期集合。"""
+        rows = self.conn.execute(
+            "SELECT day FROM reports WHERE category=? AND kind=? AND day>=? AND day<?",
+            (category, kind, start, end),
+        ).fetchall()
+        return {r["day"] for r in rows}
+
+    def earliest_report_day(self, kind: str = "daily") -> str:
+        """已生成报告的最早日期；没有则返回空串。"""
+        row = self.conn.execute(
+            "SELECT MIN(day) d FROM reports WHERE kind=?", (kind,)).fetchone()
+        return (row["d"] or "") if row else ""
+
     def list_reports(self, kind: str = "daily", limit: int = 60) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT * FROM reports WHERE kind=? ORDER BY day DESC, category LIMIT ?",

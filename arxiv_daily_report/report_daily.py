@@ -270,6 +270,139 @@ def write_index(cfg: Config, store: Store, day: str) -> Path:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 补缺：运行前扫一遍最近若干天，把「有论文但还没生成报告」的日期补上
+# ---------------------------------------------------------------------------
+def _day_list(start: dt.date, end: dt.date) -> list[str]:
+    out, d = [], start
+    while d <= end:
+        out.append(d.isoformat())
+        d += dt.timedelta(days=1)
+    return out
+
+
+def _auto_lookback(cfg: Config, store: Store, day: str) -> int:
+    """抓取窗口：至少 catch_up_days；停机多久就补多久（上限 backfill_days）。
+
+    否则停机 20 天后，最早那十几天根本没抓过论文数据，补缺也就无从补起。
+    """
+    sched = cfg["schedule"]
+    base = max(1, int(sched.get("catch_up_days", 7)))
+    cap = int(sched.get("backfill_days", 31))
+    if cap <= 0:
+        return base
+    last = store.kv_get("last_success_day", "")
+    if not last:
+        return base
+    try:
+        gap = (dt.date.fromisoformat(day) - dt.date.fromisoformat(last)).days
+    except ValueError:
+        return base
+    if gap <= 0:
+        return base
+    return min(max(base, gap + 1), max(base, cap))
+
+
+def missing_days(cfg: Config, store: Store, *, today: str | None = None,
+                 lookback: int | None = None) -> list[tuple[str, str]]:
+    """找出「有论文、但还没有日报」的 (日期, 分类)。
+
+    只看 [昨天 - lookback + 1, 昨天]（默认覆盖当月），**不看今天**——今天的
+    arXiv 公告还没结束。没有论文的日期不算缺失（当天本来就没有可报告的论文）。
+    """
+    sched = cfg["schedule"]
+    tz_name = sched.get("timezone", "Asia/Shanghai")
+    days_back = int(lookback if lookback is not None else sched.get("backfill_days", 31))
+    if days_back <= 0:
+        return []
+
+    now = dt.datetime.now(ZoneInfo(tz_name))
+    if today:
+        last = dt.date.fromisoformat(today) - dt.timedelta(days=1)
+    else:
+        last = (now.astimezone(ZoneInfo(tz_name)).date() - dt.timedelta(days=1))
+    first = last - dt.timedelta(days=days_back - 1)
+    # 不早于本月 1 号；月初时自然回看到上个月，避免跨月停机漏掉
+    month_start = last.replace(day=1)
+    if month_start > first:
+        first = max(first, month_start)
+    # 不补「程序启用之前」的日期：起点取 first_run_day（首次运行日），
+    # 兼容老库时退回"已生成报告的最早一天"。全新安装时两者都没有，
+    # 此时不做补缺，避免一装上就刷出整月历史报告和对应的模型开销。
+    start = store.kv_get("first_run_day", "") or store.earliest_report_day()
+    if not start:
+        return []
+    if start[:10] > first.isoformat():
+        first = dt.date.fromisoformat(start[:10])
+
+    cats = enabled_categories(cfg)
+    if not cats:
+        return []
+
+    missing: list[tuple[str, str]] = []
+    for day in _day_list(first, last):
+        for cat in cats:
+            if store.report_exists(day, cat):
+                continue
+            if not store.papers_for(cat, tz_name, day,
+                                    policy=cfg.get("crosslist_policy", "primary")):
+                continue                      # 当天确实没有论文，不算遗漏
+            missing.append((day, cat))
+    return missing
+
+
+def backfill_missing(
+    cfg: Config,
+    store: Store,
+    *,
+    use_llm: bool = True,
+    progress: Progress | None = None,
+    limit: int | None = None,
+) -> list[Path]:
+    """补齐缺失的日报。单次最多补 `backfill_max_per_run` 天，避免一次性刷爆模型额度。"""
+    say: Progress = progress or (lambda m: log.info("%s", m))
+    tz_name = cfg["schedule"].get("timezone", "Asia/Shanghai")
+    cap = int(cfg["schedule"].get("backfill_max_per_run", 3)
+              if limit is None else limit)
+    pending = missing_days(cfg, store)
+    if not pending:
+        say("补缺检查：最近没有缺失的日报")
+        return []
+
+    days = sorted({d for d, _c in pending})
+    say(f"补缺检查：发现 {len(days)} 天缺日报（{days[0]} ~ {days[-1]}）")
+    if len(days) > cap:
+        say(f"  本次先补最早的 {cap} 天，其余下次继续")
+        days = days[:cap]
+
+    math = MathService(store, assets_dir=cfg.assets_dir,
+                       backend=cfg["report"].get("math_backend", "auto"))
+    produced: list[Path] = []
+    for day in days:
+        say(f"  补 {day}")
+        for sub in cfg.get("subscriptions", []):
+            cat = (sub.get("category") or "").strip()
+            if not cat or not sub.get("enabled", True):
+                continue
+            if store.report_exists(day, cat):
+                continue
+            papers = store.papers_for(cat, tz_name, day,
+                                      policy=cfg.get("crosslist_policy", "primary"))
+            if not papers:
+                continue
+            path, _ = build_category_report(
+                cfg, store, category=cat, day=day, papers=papers, math=math,
+                use_llm=use_llm, out_dir=_out_dir(cfg, sub),
+                report_name=sub.get("report_name", ""), progress=say,
+            )
+            store.record_report(day, cat, str(path), len(papers))
+            produced.append(path)
+        write_index(cfg, store, day)
+    if produced:
+        say(f"补缺完成：生成 {len(produced)} 份报告")
+    return produced
+
+
 def run_daily(
     cfg: Config,
     store: Store,
@@ -282,12 +415,16 @@ def run_daily(
 ) -> list[Path]:
     say: Progress = progress or (lambda m: log.info("%s", m))
     tz_name = cfg["schedule"].get("timezone", "Asia/Shanghai")
+    day_arg = day                      # 记住调用方是否显式指定了某一天
     day = day or target_day(cfg)
+    if not store.kv_get("first_run_day", ""):
+        store.kv_set("first_run_day", day)
     run_id = store.start_run(f"daily {day}")
     produced: list[Path] = []
     try:
         if not skip_collect:
-            collect(cfg, store, day=day, only=only, progress=say)
+            collect(cfg, store, day=day, only=only, progress=say,
+                    lookback_days=_auto_lookback(cfg, store, day))
 
         cats = enabled_categories(cfg)
         if only:
@@ -328,6 +465,14 @@ def run_daily(
                 store.record_report(day, "combined", str(path), len(allp))
                 produced.append(path)
 
+        # 默认日跑完后，把最近缺失的日期补上（显式指定 --day 时不补）
+        if day_arg is None:
+            try:
+                backfill_missing(cfg, store, use_llm=use_llm, progress=say)
+            except Exception as exc:  # noqa: BLE001 - 补缺失败不该让本轮整体失败
+                log.warning("补缺失败（不影响本轮日报）：%s", exc)
+
+        store.kv_set("last_success_day", day)
         idx = write_index(cfg, store, day)
         say(f"索引已更新：{idx}")
         log.debug("公式缓存 %s，数学服务统计 %s", store.math_count(), math.report_stats())

@@ -21,7 +21,9 @@
     "report_day_offset": 1,
     "auto_monthly": true,
     "catch_up_days": 7,
-    "retry": 3
+    "retry": 3,
+    "backfill_days": 31,
+    "backfill_max_per_run": 3
   },
   "paths": {
     "reports": "",

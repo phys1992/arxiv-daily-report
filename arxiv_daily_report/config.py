@@ -218,6 +218,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "report_day_offset": 1,        # 报告日 = 运行日 - N 天
         "auto_monthly": True,          # 每月 1 号自动生成上一个自然月的简报
         "catch_up_days": 7,            # 每次回溯天数（周末/节假日补录）
+        # 运行前扫一遍最近这些天，把「有论文但还没生成报告」的日期补上，
+        # 避免停机/改配置期间漏掉。0 = 关闭补缺。
+        "backfill_days": 31,
+        "backfill_max_per_run": 3,     # 单次最多补几天（控制模型开销）
         "retry": 3,
     },
     # ---- 路径（相对项目根或 ADR_HOME；绝对路径原样使用）----
