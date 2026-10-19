@@ -1581,6 +1581,61 @@ class RepoHygieneTest(HermeticTestCase):
             self.assertTrue((PROJECT / rel).is_file(), f"{rel} 缺失")
 
 
+class WebControlTest(HermeticTestCase):
+    """设置界面的控件形态。
+
+    回归背景：模型与时区原本用 <input list> + <datalist>。datalist 会按输入框
+    现有内容过滤选项 —— 已经填着 deepseek-flash 时，展开只剩它自己，用户
+    根本换不了模型。时区同理，只有一个值可选。
+    """
+
+    def _html(self) -> str:
+        return (PROJECT / "web/index.html").read_text(encoding="utf-8")
+
+    def _js(self) -> str:
+        return (PROJECT / "web/app.js").read_text(encoding="utf-8")
+
+    def test_timezone_is_a_real_select_with_many_choices(self):
+        html = self._html()
+        m = __import__("re").search(
+            r'<select[^>]*data-path="schedule\.timezone"[^>]*>(.*?)</select>', html, __import__("re").S)
+        self.assertIsNotNone(m, "时区应当是 select")
+        opts = __import__("re").findall(r'value="([^"]+)"', m.group(1))
+        self.assertGreaterEqual(len(opts), 15, "常见时区应给出足够多的选择")
+        self.assertIn("Asia/Shanghai", opts)
+        self.assertIn("Asia/Tokyo", opts)
+        self.assertIn("America/New_York", opts)
+        self.assertIn("UTC", opts)
+
+    def test_timezone_is_not_a_datalist(self):
+        html = self._html()
+        self.assertNotIn('list="tz-options"', html, "datalist 会按当前值过滤，导致只有一个可选")
+        self.assertNotIn('id="tz-options"', html)
+
+    def test_model_picker_is_a_real_select(self):
+        html = self._html()
+        self.assertIn('id="model-pick"', html, "模型要有真正的下拉框")
+        self.assertNotIn('list="model-options"', html, "datalist 同样会按当前值过滤")
+        self.assertNotIn('id="model-options"', html)
+        js = self._js()
+        self.assertIn("#model-pick", js)
+        # 选中后要写回输入框与配置，并复位到提示项
+        self.assertIn("setPath(state.config, 'llm.model', pick.value)", js)
+
+    def test_model_picker_writes_into_model_input(self):
+        js = self._js()
+        block = js[js.index("function renderModelOptions"):]
+        block = block[:block.index("\n  }\n")] if "\n  }\n" in block else block
+        self.assertIn("$('#llm-model')", block, "选中的模型要填进模型输入框")
+        self.assertIn("hidden = false", block, "拉到列表后要显示下拉框")
+
+    def test_timezone_custom_value_is_preserved(self):
+        """配置里的时区若不在下拉列表中，不能被静默改回默认值。"""
+        js = self._js()
+        self.assertIn("function ensureTimezoneOption", js)
+        self.assertIn("schedule.timezone", js)
+
+
 class TimezoneTest(HermeticTestCase):
     """时区：arXiv 用 UTC，报告日按用户配置的时区切分，两者必须换算准确。"""
 

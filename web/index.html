@@ -71,10 +71,12 @@
             <label class="field">
               <span class="label" data-i18n="llm.model"></span>
               <span class="input-row">
-                <input type="text" id="llm-model" data-path="llm.model" list="model-options" spellcheck="false" autocomplete="off">
+                <input type="text" id="llm-model" data-path="llm.model" spellcheck="false" autocomplete="off">
                 <button class="btn btn-ghost" id="btn-models" data-i18n="action.getModels"></button>
               </span>
-              <datalist id="model-options"></datalist>
+              <!-- 拉取模型列表后出现。<datalist> 会按输入框现有内容过滤选项，
+                   已填着模型名时展开只剩它自己，所以这里用真正的 select。 -->
+              <select id="model-pick" hidden></select>
               <small class="hint" data-i18n="llm.model_hint"></small>
             </label>
             <label class="field">
@@ -128,7 +130,7 @@
             </label>
             <label class="field">
               <span class="label" data-i18n="llm.fallback_model"></span>
-              <input type="text" data-path="llm.fallback_model" list="model-options" spellcheck="false" autocomplete="off">
+              <input type="text" data-path="llm.fallback_model" spellcheck="false" autocomplete="off">
             </label>
           </div>
         </div>
@@ -173,18 +175,43 @@
             </label>
             <label class="field">
               <span class="label" data-i18n="schedule.timezone"></span>
-              <input type="text" data-path="schedule.timezone" list="tz-options" spellcheck="false" autocomplete="off">
-              <datalist id="tz-options">
-                <option value="Asia/Shanghai"></option>
-                <option value="Asia/Hong_Kong"></option>
-                <option value="Asia/Tokyo"></option>
-                <option value="Asia/Singapore"></option>
-                <option value="UTC"></option>
-                <option value="Europe/London"></option>
-                <option value="Europe/Berlin"></option>
-                <option value="America/New_York"></option>
-                <option value="America/Los_Angeles"></option>
-              </datalist>
+                            <select data-path="schedule.timezone" id="tz-select">
+                <optgroup label="Asia">
+                  <option value="Asia/Shanghai">Asia/Shanghai</option>
+                  <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+                  <option value="Asia/Taipei">Asia/Taipei</option>
+                  <option value="Asia/Tokyo">Asia/Tokyo</option>
+                  <option value="Asia/Seoul">Asia/Seoul</option>
+                  <option value="Asia/Singapore">Asia/Singapore</option>
+                  <option value="Asia/Bangkok">Asia/Bangkok</option>
+                  <option value="Asia/Jakarta">Asia/Jakarta</option>
+                  <option value="Asia/Kolkata">Asia/Kolkata</option>
+                  <option value="Asia/Dubai">Asia/Dubai</option>
+                </optgroup>
+                <optgroup label="Europe / Africa">
+                  <option value="Europe/London">Europe/London</option>
+                  <option value="Europe/Paris">Europe/Paris</option>
+                  <option value="Europe/Berlin">Europe/Berlin</option>
+                  <option value="Europe/Moscow">Europe/Moscow</option>
+                  <option value="Africa/Cairo">Africa/Cairo</option>
+                  <option value="Africa/Johannesburg">Africa/Johannesburg</option>
+                </optgroup>
+                <optgroup label="Americas">
+                  <option value="America/New_York">America/New_York</option>
+                  <option value="America/Chicago">America/Chicago</option>
+                  <option value="America/Denver">America/Denver</option>
+                  <option value="America/Los_Angeles">America/Los_Angeles</option>
+                  <option value="America/Sao_Paulo">America/Sao_Paulo</option>
+                  <option value="America/Mexico_City">America/Mexico_City</option>
+                </optgroup>
+                <optgroup label="Oceania / UTC">
+                  <option value="Australia/Sydney">Australia/Sydney</option>
+                  <option value="Australia/Perth">Australia/Perth</option>
+                  <option value="Pacific/Auckland">Pacific/Auckland</option>
+                  <option value="UTC">UTC</option>
+                </optgroup>
+              </select>
+              <small class="hint" data-i18n="schedule.timezone_hint"></small>
             </label>
             <label class="field">
               <span class="label" data-i18n="schedule.report_day_offset"></span>

@@ -85,13 +85,13 @@
 
 ```bash
 # Debian / Ubuntu
-sudo apt install ./arxiv-daily-report_0.1.2-1_amd64.deb
+sudo apt install ./arxiv-daily-report_0.1.3-1_amd64.deb
 
 # Fedora / RHEL
-sudo dnf install ./arxiv-daily-report-0.1.2-1.x86_64.rpm
+sudo dnf install ./arxiv-daily-report-0.1.3-1.x86_64.rpm
 
 # Arch / Manjaro
-sudo pacman -U ./arxiv-daily-report-0.1.2-1-x86_64.pkg.tar.zst
+sudo pacman -U ./arxiv-daily-report-0.1.3-1-x86_64.pkg.tar.zst
 ```
 
 安装后命令是 `arxiv-daily-report`。三种包安装到相同位置，便于统一维护：
@@ -546,7 +546,7 @@ Base URL 填例如 `http://127.0.0.1:11434/v1`，密钥可留空。
   且每篇只抓一次、结果缓存在本地，重复生成报告不会重复请求。
   报告中一律链接到 arXiv 摘要页。
 - **建议在配置里填写 `fetch.contact`**（你的邮箱或仓库地址），它会出现在 User-Agent 中，
-  便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.1.2 (arXiv API client; you@example.com)`。
+  便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.1.3 (arXiv API client; you@example.com)`。
 - 本项目与 arXiv.org **无任何官方关联**。
 
 ### 遇到 `HTTP 429 Too Many Requests`
@@ -637,7 +637,7 @@ verified against that day's paper list.
 Install (Linux only):
 
 ```bash
-sudo apt install ./arxiv-daily-report_0.1.2-1_amd64.deb   # or dnf / pacman -U
+sudo apt install ./arxiv-daily-report_0.1.3-1_amd64.deb   # or dnf / pacman -U
 pip install --user weasyprint          # PDF backend (packaged on Arch as python-weasyprint)
 arxiv-daily-report serve               # configure the LLM provider in the web UI
 systemctl --user enable --now arxiv-daily-report   # auto-start, no root required

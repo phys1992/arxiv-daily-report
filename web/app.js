@@ -293,6 +293,23 @@
   /* =====================================================================
    * render —— 大模型设置
    * ===================================================================== */
+  function ensureTimezoneOption() {
+    var sel = $('#tz-select');
+    if (!sel) return;
+    var want = state.config && state.config.schedule ? state.config.schedule.timezone : '';
+    if (!want) return;
+    var found = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === want) { found = true; break; }
+    }
+    if (!found) {
+      // 自定义时区（例如 Asia/Kathmandu）也要能显示出来，不能被悄悄改回默认
+      var opt = el('option', { value: want, text: want + ' · ' + t('schedule.timezone_custom') });
+      sel.appendChild(opt);
+    }
+    sel.value = want;
+  }
+
   function renderProviderOptions() {
     var sel = $('#llm-provider');
     var fb = $('#fallback-provider');
@@ -344,14 +361,33 @@
   }
 
   function renderModelOptions() {
-    var dl = $('#model-options');
-    dl.textContent = '';
+    var pick = $('#model-pick');
+    if (!pick) return;
+    pick.textContent = '';
     var seen = {};
+    var list = [];
     state.modelOptions.forEach(function (m) {
       if (!m || seen[m]) return;
       seen[m] = 1;
-      dl.appendChild(el('option', { value: m }));
+      list.push(m);
     });
+    if (!list.length) { pick.hidden = true; return; }
+    // 首项是提示，选中它不改变输入框
+    pick.appendChild(el('option', { value: '', text: t('llm.model_pick', { n: list.length }) }));
+    list.forEach(function (m) { pick.appendChild(el('option', { value: m, text: m })); });
+    pick.hidden = false;
+    pick.value = '';
+    if (!pick.dataset.bound) {
+      pick.dataset.bound = '1';
+      pick.addEventListener('change', function () {
+        if (!pick.value) return;
+        var input = $('#llm-model');
+        input.value = pick.value;
+        setPath(state.config, 'llm.model', pick.value);
+        markDirty();
+        pick.value = '';                       // 回到提示项，方便连续选择
+      });
+    }
   }
 
   /* =====================================================================
@@ -707,6 +743,7 @@
     renderHeader();
     renderProviderOptions();
     renderModelOptions();
+    ensureTimezoneOption();
     applyValues();
     syncProviderUI();
     renderCategoryTree();
