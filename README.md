@@ -22,7 +22,7 @@
 | **分类订阅** | 155 个 arXiv 分类任意多选；一次运行同步更新全部报告 |
 | **多分类去重** | 按 arXiv ID 全局去重：同一篇论文只调用一次模型，只出现在一份报告里 |
 | **仅统计新投稿** | 只收 v1 首次公开，忽略版本更新（可配置） |
-| **北京时间自然日** | 报告日按 `Asia/Shanghai` 自然日切分；自动回溯 7 天，周末/节假日延迟公告也能补录 |
+| **按自然日切分** | 报告日按 `Asia/Shanghai`（可配置成任意时区）自然日切分；自动回溯 7 天，周末/节假日延迟公告也能补录 |
 | **结合全文** | 抓取 arXiv 官方 HTML，读取论文的**结论/讨论/总结**小节原文，与摘要一起交给模型；抓不到全文（老论文等）时如实降级为仅摘要 |
 | **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；默认按 arXiv 预印本排版——西文与公式用 **Computer Modern**，汉字用 **思源宋体**；缺字体时自动回退并在日志里提示 |
 | **公式排版** | MathJax 预渲染成 SVG（与 LaTeX 输出同一套 Computer Modern 字形），按公式哈希缓存 |
@@ -43,8 +43,11 @@
 
 每天定时（默认北京时间 19:00）跑一次：
 
-1. **抓取** 通过 arXiv API 拉取订阅分类在目标日（默认昨天）的论文。报告日按北京时间自然日切分，
-   并向前**回溯若干天**（默认 7 天），这样周末与节假日延迟公告的论文也不会漏；只收首次公开的 v1。
+1. **抓取** 通过 arXiv API 拉取订阅分类在目标日（默认昨天）的论文。报告日按配置时区的**自然日**
+   切分，并向前**回溯若干天**（默认 7 天），这样周末与节假日延迟公告的论文也不会漏；只收首次公开的 v1。
+   > arXiv 的时间戳是 **UTC**（形如 `2026-10-16T17:30:38Z`）。程序内部一律按 UTC 比较，
+   > 只在划分「哪一天」时换算成配置的时区——所以把时区改成东京、纽约都不影响正确性，
+   > 同一天凌晨/深夜的论文不会被算错日子。
 2. **去重** 按 arXiv ID 全局去重。一篇论文只调用一次模型，也只出现在一份报告里
    （跨分类的交叉列表论文按 `crosslist_policy` 决定归属）。
 3. **读全文** 每篇抓一次 arXiv 官方 HTML，提取**结论 / 讨论 / 总结**类小节的原文，
@@ -82,13 +85,13 @@
 
 ```bash
 # Debian / Ubuntu
-sudo apt install ./arxiv-daily-report_0.1.1-1_amd64.deb
+sudo apt install ./arxiv-daily-report_0.1.2-1_amd64.deb
 
 # Fedora / RHEL
-sudo dnf install ./arxiv-daily-report-0.1.1-1.x86_64.rpm
+sudo dnf install ./arxiv-daily-report-0.1.2-1.x86_64.rpm
 
 # Arch / Manjaro
-sudo pacman -U ./arxiv-daily-report-0.1.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./arxiv-daily-report-0.1.2-1-x86_64.pkg.tar.zst
 ```
 
 安装后命令是 `arxiv-daily-report`。三种包安装到相同位置，便于统一维护：
@@ -543,7 +546,7 @@ Base URL 填例如 `http://127.0.0.1:11434/v1`，密钥可留空。
   且每篇只抓一次、结果缓存在本地，重复生成报告不会重复请求。
   报告中一律链接到 arXiv 摘要页。
 - **建议在配置里填写 `fetch.contact`**（你的邮箱或仓库地址），它会出现在 User-Agent 中，
-  便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.1.1 (arXiv API client; you@example.com)`。
+  便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.1.2 (arXiv API client; you@example.com)`。
 - 本项目与 arXiv.org **无任何官方关联**。
 
 ### 遇到 `HTTP 429 Too Many Requests`
@@ -634,7 +637,7 @@ verified against that day's paper list.
 Install (Linux only):
 
 ```bash
-sudo apt install ./arxiv-daily-report_0.1.1-1_amd64.deb   # or dnf / pacman -U
+sudo apt install ./arxiv-daily-report_0.1.2-1_amd64.deb   # or dnf / pacman -U
 pip install --user weasyprint          # PDF backend (packaged on Arch as python-weasyprint)
 arxiv-daily-report serve               # configure the LLM provider in the web UI
 systemctl --user enable --now arxiv-daily-report   # auto-start, no root required

@@ -198,11 +198,8 @@ def collect_month(cfg: Config, store: Store, month: str) -> MonthlyData:
 
     # 简报里报"日报实际覆盖的论文数"，而不是库内该月全部论文
     # （用户可能只生成了部分日期的日报，或订阅了多个分类）
-    prows = store.conn.execute(
-        "SELECT payload FROM papers WHERE day_bj>=? AND day_bj<? AND version=1",
-        (start, end),
-    ).fetchall()
-    papers = [Paper.from_dict(json.loads(x["payload"])) for x in prows]
+    # 按 UTC 时间戳取当月论文：时区只影响月份边界的换算
+    papers = store.papers_in_month(tz, month)
     data.by_category = Counter(p.primary_category for p in papers)
     data.paper_count = sum(int(d.get("count") or 0) for d in data.digests.values())
 

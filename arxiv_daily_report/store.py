@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable
 
-from .models import Paper
+from .models import Paper, day_bounds_epoch, month_bounds_epoch
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS papers (
     updated        TEXT,
     day_bj         TEXT,
     day_et         TEXT,
+    ts_utc         INTEGER,
     payload        TEXT NOT NULL,
     summarized     INTEGER NOT NULL DEFAULT 0,
     first_seen     TEXT NOT NULL
@@ -127,6 +128,17 @@ class Store:
 
     def _migrate(self) -> None:
         """老版本数据库的轻量迁移（幂等）。"""
+        # 时区无关的日期查询：按 UTC 时间戳建索引，任意时区都能精确按日取
+        try:
+            cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(papers)")}
+            if "ts_utc" not in cols:
+                self.conn.execute("ALTER TABLE papers ADD COLUMN ts_utc INTEGER")
+                self._backfill_ts_utc()
+            # 索引必须等列存在之后再建：老库在 SCHEMA 阶段还没有这一列
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_ts ON papers(ts_utc)")
+            self.conn.commit()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(day_digest)")}
             if "theme_counts" not in cols:
@@ -139,6 +151,21 @@ class Store:
                 )
         except Exception:  # noqa: BLE001
             pass
+
+    def _backfill_ts_utc(self) -> None:
+        """把已有记录的 updated 时间换算成 UTC 秒回填。"""
+        from .models import _parse_iso
+
+        rows = self.conn.execute(
+            "SELECT uid, payload FROM papers WHERE ts_utc IS NULL").fetchall()
+        for r in rows:
+            try:
+                updated = json.loads(r["payload"]).get("updated") or ""
+            except Exception:  # noqa: BLE001
+                updated = ""
+            ts = int(_parse_iso(updated).timestamp())
+            self.conn.execute("UPDATE papers SET ts_utc=? WHERE uid=?", (ts, r["uid"]))
+        self.conn.commit()
 
     def close(self) -> None:
         try:
@@ -198,16 +225,17 @@ class Store:
         """
         bj = paper.day_str("Asia/Shanghai")
         et = paper.day_str("America/New_York")
+        ts = int(paper.dt_updated("UTC").timestamp())
         new = not self.has_paper(paper.uid)
         with self._lock:
             if new:
                 self.conn.execute(
                     "INSERT OR IGNORE INTO papers"
-                    "(uid,arxiv_id,version,primary_category,published,updated,day_bj,day_et,payload,"
-                    " summarized,first_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    "(uid,arxiv_id,version,primary_category,published,updated,day_bj,day_et,"
+                    " ts_utc,payload,summarized,first_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         paper.uid, paper.arxiv_id, paper.version, paper.primary_category,
-                        paper.published, paper.updated, bj, et,
+                        paper.published, paper.updated, bj, et, ts,
                         json.dumps(paper.to_dict(), ensure_ascii=False),
                         1 if paper.summary else 0, _now(),
                     ),
@@ -232,24 +260,38 @@ class Store:
     def papers_for(self, category: str, tz: str, day: str, *, policy: str = "primary") -> list[Paper]:
         """取某分类某日的论文。
 
+        按 UTC 时间戳的 [起, 止) 区间筛选 —— 时区只影响区间的换算，
+        因此配置成任何时区都精确，不再依赖预先算好的 day_bj / day_et 列。
+
         policy = primary : 只取被分配到该分类报告的论文（默认，跨分类不重复）
         policy = all     : 凡带该分类标签的都取（可能跨报告重复）
         """
-        col = "day_bj" if tz == "Asia/Shanghai" else "day_et"
+        start, end = day_bounds_epoch(day, tz)
         extra = "AND c.is_primary=1" if policy != "all" else ""
         sql = (
             "SELECT p.payload FROM papers p JOIN paper_categories c ON c.uid=p.uid "
-            f"WHERE c.category=? AND p.{col}=? {extra} "
+            f"WHERE c.category=? AND p.ts_utc>=? AND p.ts_utc<? {extra} "
             "ORDER BY p.primary_category, p.arxiv_id"
         )
-        rows = self.conn.execute(sql, (category, day)).fetchall()
+        rows = self.conn.execute(sql, (category, start, end)).fetchall()
         return [Paper.from_dict(json.loads(r["payload"])) for r in rows]
 
     def all_papers_on(self, tz: str, day: str) -> list[Paper]:
-        col = "day_bj" if tz == "Asia/Shanghai" else "day_et"
+        start, end = day_bounds_epoch(day, tz)
         rows = self.conn.execute(
-            f"SELECT payload FROM papers WHERE {col}=? ORDER BY primary_category, arxiv_id",
-            (day,),
+            "SELECT payload FROM papers WHERE ts_utc>=? AND ts_utc<? "
+            "ORDER BY primary_category, arxiv_id",
+            (start, end),
+        ).fetchall()
+        return [Paper.from_dict(json.loads(r["payload"])) for r in rows]
+
+    def papers_in_month(self, tz: str, month: str) -> list[Paper]:
+        """某自然月的论文（按配置时区划分月份边界）。"""
+        start, end = month_bounds_epoch(month, tz)
+        rows = self.conn.execute(
+            "SELECT payload FROM papers WHERE ts_utc>=? AND ts_utc<? AND version=1 "
+            "ORDER BY primary_category, arxiv_id",
+            (start, end),
         ).fetchall()
         return [Paper.from_dict(json.loads(r["payload"])) for r in rows]
 
@@ -260,11 +302,11 @@ class Store:
         return [r["category"] for r in rows]
 
     def day_counts(self, tz: str, day: str) -> dict[str, int]:
-        col = "day_bj" if tz == "Asia/Shanghai" else "day_et"
+        start, end = day_bounds_epoch(day, tz)
         rows = self.conn.execute(
             "SELECT primary_category, COUNT(*) n FROM papers WHERE "
-            f"{col}=? AND version=1 GROUP BY primary_category ORDER BY n DESC",
-            (day,),
+            "ts_utc>=? AND ts_utc<? AND version=1 GROUP BY primary_category ORDER BY n DESC",
+            (start, end),
         ).fetchall()
         return {r["primary_category"]: r["n"] for r in rows}
 

@@ -1335,15 +1335,15 @@ class CacheCleanupTest(HermeticTestCase):
             finally:
                 store.close()
 
-    def _paper_payload(self, summary="要点", ver=None):
+    def _paper_payload(self, summary="要点", ver=None, day="2026-01-05", aid="2610.1"):
         import json as _j
         from arxiv_daily_report.summarize import PROMPT_VERSION
 
         return _j.dumps({
-            "arxiv_id": "2610.1", "version": 1, "title": "T",
+            "arxiv_id": aid, "version": 1, "title": "T",
             "abstract": "A" * 400, "authors": ["X"], "categories": ["gr-qc"],
-            "primary_category": "gr-qc", "announced": "2026-01-05T00:00:00Z",
-            "updated": "2026-01-05T00:00:00Z", "summary": summary, "themes": ["blackhole"],
+            "primary_category": "gr-qc", "announced": f"{day}T02:00:00Z",
+            "updated": f"{day}T02:00:00Z", "summary": summary, "themes": ["blackhole"],
             "comment": "", "journal_ref": "", "doi": "", "abs_url": "", "pdf_url": "",
             "llm_prompt_version": PROMPT_VERSION if ver is None else ver,
         }, ensure_ascii=False)
@@ -1367,12 +1367,17 @@ class CacheCleanupTest(HermeticTestCase):
                 tz = cfg["schedule"]["timezone"]
                 # 两个日期各有日报存档；一个整天是当前版本，一个有一篇是旧版本
                 for day, ver in (("2026-01-05", None), ("2026-01-06", "daily-v1")):
+                    from arxiv_daily_report.models import day_bounds_epoch
+
                     uid = f"2610.{day[-2:]}v1"
+                    ts = day_bounds_epoch(day, "Asia/Shanghai")[0] + 36000   # 当天 10:00 北京
                     store.conn.execute(
                         "INSERT INTO papers(uid,arxiv_id,version,primary_category,published,"
-                        "updated,day_bj,day_et,payload,summarized,first_seen) "
-                        "VALUES(?,?,1,'gr-qc','2026-01-05','2026-01-05',?,'2026-01-05',?,1,'x')",
-                        (uid, uid.split("v")[0], day, self._paper_payload(ver=ver)))
+                        "updated,day_bj,day_et,ts_utc,payload,summarized,first_seen) "
+                        "VALUES(?,?,1,'gr-qc',?,?,?,'2026-01-05',?,?,1,'x')",
+                        (uid, uid.split("v")[0], f"{day}T02:00:00Z", f"{day}T02:00:00Z",
+                         day, ts,
+                         self._paper_payload(ver=ver, day=day, aid=uid.split("v")[0])))
                     store.conn.execute(
                         "INSERT INTO paper_categories(uid,category,is_primary) VALUES(?,'gr-qc',1)",
                         (uid,))
@@ -1403,11 +1408,15 @@ class CacheCleanupTest(HermeticTestCase):
             cfg = self._cfg(tmp)
             store = Store(tmp / "data" / "state.sqlite3")
             try:
+                from arxiv_daily_report.models import day_bounds_epoch
+
+                ts = day_bounds_epoch("2026-01-05", "Asia/Shanghai")[0] + 36000
                 store.conn.execute(
                     "INSERT INTO papers(uid,arxiv_id,version,primary_category,published,"
-                    "updated,day_bj,day_et,payload,summarized,first_seen) "
-                    "VALUES('a1','2610.1',1,'gr-qc','2026-01-05','2026-01-05','2026-01-05',"
-                    "'2026-01-05',?,1,'x')", (self._paper_payload(),))
+                    "updated,day_bj,day_et,ts_utc,payload,summarized,first_seen) "
+                    "VALUES('a1','2610.1',1,'gr-qc','2026-01-05T02:00:00Z',"
+                    "'2026-01-05T02:00:00Z','2026-01-05','2026-01-05',?,?,1,'x')",
+                    (ts, self._paper_payload()))
                 store.conn.commit()
                 r = release_abstracts(cfg, store, cutoff=_dt.date(2026, 2, 1),
                                       progress=lambda m: None)
@@ -1570,6 +1579,105 @@ class RepoHygieneTest(HermeticTestCase):
         """校验脚本要求的资产，必须在工作区里真实存在。"""
         for rel in self.ASSETS:
             self.assertTrue((PROJECT / rel).is_file(), f"{rel} 缺失")
+
+
+class TimezoneTest(HermeticTestCase):
+    """时区：arXiv 用 UTC，报告日按用户配置的时区切分，两者必须换算准确。"""
+
+    def test_parse_iso_never_returns_naive(self):
+        """naive datetime 交给 astimezone() 会按本机时区解释，导致整体偏移。
+
+        在北京时间的机器上，一个「不带时区」的时间戳会被当成北京时间，
+        比 UTC 晚 8 小时，足以把论文算到前一天/后一天。
+        """
+        from arxiv_daily_report.models import _parse_iso
+
+        for raw in ("2026-10-16T17:30:38Z", "2026-10-16T17:30:38",
+                    "2026-10-16T10:30:38-07:00", "2026-10-16T17:30:38+00:00"):
+            parsed = _parse_iso(raw)
+            self.assertIsNotNone(parsed.tzinfo, f"{raw} 解析出了 naive datetime")
+
+    def test_naive_timestamp_is_treated_as_utc(self):
+        from arxiv_daily_report.models import _parse_iso
+
+        self.assertEqual(_parse_iso("2026-10-16T17:30:38").isoformat(),
+                         "2026-10-16T17:30:38+00:00")
+
+    def test_explicit_offset_is_respected(self):
+        from arxiv_daily_report.models import _parse_iso
+
+        # 太平洋时间 10:30 = UTC 17:30
+        v = _parse_iso("2026-10-16T10:30:38-07:00")
+        self.assertEqual(v.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                         "2026-10-16 17:30")
+
+    def test_day_bounds_for_various_timezones(self):
+        from arxiv_daily_report.models import day_bounds_utc
+
+        expected = {
+            "UTC": "2026-10-16T00:00:00+00:00",
+            "Asia/Shanghai": "2026-10-15T16:00:00+00:00",   # UTC+8
+            "Asia/Tokyo": "2026-10-15T15:00:00+00:00",      # UTC+9
+            "Europe/London": "2026-10-15T23:00:00+00:00",   # BST = UTC+1
+        }
+        for tz, want in expected.items():
+            start, end = day_bounds_utc("2026-10-16", tz)
+            self.assertEqual(start.isoformat(), want, tz)
+            self.assertEqual((end - start).total_seconds(), 86400, tz)
+
+    def test_day_bounds_handles_dst(self):
+        """纽约夏令时 UTC-4、冬令时 UTC-5，必须自动跟着变。"""
+        from arxiv_daily_report.models import day_bounds_utc
+
+        summer, _ = day_bounds_utc("2026-07-15", "America/New_York")
+        winter, _ = day_bounds_utc("2026-01-15", "America/New_York")
+        self.assertEqual(summer.hour, 4)
+        self.assertEqual(winter.hour, 5)
+
+    def test_month_bounds(self):
+        from arxiv_daily_report.models import month_bounds_utc
+
+        start, end = month_bounds_utc("2026-10", "Asia/Shanghai")
+        self.assertEqual(start.isoformat(), "2026-09-30T16:00:00+00:00")
+        self.assertEqual(end.isoformat(), "2026-10-31T16:00:00+00:00")
+
+    def test_boundary_paper_lands_on_different_days_per_timezone(self):
+        """同一篇论文在不同时区可能属于不同的一天 —— 这正是要靠 UTC 区间解决的。"""
+        from arxiv_daily_report.models import day_bounds_epoch
+
+        # 2026-10-12T18:00Z：北京已是 13 日凌晨，UTC/纽约还是 12 日
+        ts = int(_utc("2026-10-12T18:00:00Z").timestamp())
+        self.assertIn(ts, range(*day_bounds_epoch("2026-10-13", "Asia/Shanghai")))
+        self.assertIn(ts, range(*day_bounds_epoch("2026-10-12", "UTC")))
+        self.assertIn(ts, range(*day_bounds_epoch("2026-10-12", "America/New_York")))
+
+    def test_papers_for_respects_configured_timezone(self):
+        """时区换成东京后，同一批论文的归日必须跟着变。"""
+        from arxiv_daily_report.models import day_bounds_epoch
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            store = Store(tmp / "s.sqlite3")
+            try:
+                boundary = _utc("2026-10-12T18:00:00Z")
+                p = make_paper(aid="2610.99999")
+                p.updated = "2026-10-12T18:00:00Z"
+                p.published = p.updated
+                store.add_paper(p, {"gr-qc": True})
+                self.assertEqual(
+                    [x.arxiv_id for x in store.papers_for("gr-qc", "Asia/Shanghai", "2026-10-13")],
+                    ["2610.99999"])
+                self.assertEqual(
+                    store.papers_for("gr-qc", "Asia/Shanghai", "2026-10-12"), [])
+                self.assertEqual(
+                    [x.arxiv_id for x in store.papers_for("gr-qc", "UTC", "2026-10-12")],
+                    ["2610.99999"])
+            finally:
+                store.close()
+
+
+def _utc(raw: str):
+    return dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
 
 
 class ArxivRateLimitTest(HermeticTestCase):

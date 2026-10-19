@@ -313,14 +313,11 @@ class ArxivClient:
 
 
 def beijing_day_window(day: str | dt.date, tz: str = "Asia/Shanghai") -> tuple[dt.datetime, dt.datetime]:
-    """北京（或指定时区）自然日 -> UTC 半开区间 [start, end)。"""
-    from zoneinfo import ZoneInfo
+    """某时区自然日 -> UTC 半开区间 [start, end)。
 
-    if isinstance(day, str):
-        d = dt.date.fromisoformat(day)
-    else:
-        d = day
-    zone = ZoneInfo(tz)
-    start = dt.datetime(d.year, d.month, d.day, tzinfo=zone).astimezone(dt.timezone.utc)
-    end = start + dt.timedelta(days=1)
-    return start, end
+    名字是历史遗留（最早只支持北京时间），换算本身对任意时区都成立，
+    统一走 models.day_bounds_utc，避免两处实现漂移。
+    """
+    from .models import day_bounds_utc
+
+    return day_bounds_utc(day, tz)

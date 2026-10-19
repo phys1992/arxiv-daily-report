@@ -155,11 +155,25 @@ def release_abstracts(cfg: Config, store: Store, *, cutoff: dt.date | None = Non
     import json as _json
     updates: list[tuple[str, str]] = []
     if safe_days:
-        days = sorted({d for d, _c in safe_days})
-        marks = ",".join("?" * len(days))
-        rows = store.conn.execute(
-            f"SELECT uid, payload FROM papers WHERE day_bj IN ({marks})", days
-        ).fetchall()
+        # 用与生成报告完全相同的取数逻辑（按配置时区的自然日），
+        # 这样「哪些论文属于这一天」的口径不会和报告不一致
+        # 与 papers_for 完全相同的口径：分类 + 该时区自然日的 UTC 区间
+        from .models import day_bounds_epoch
+
+        rows, seen_uids = [], set()
+        for day, cat in sorted(safe_days):
+            start, end = day_bounds_epoch(day, tz)
+            sql = (
+                "SELECT DISTINCT p.uid, p.payload FROM papers p "
+                "JOIN paper_categories c ON c.uid=p.uid "
+                "WHERE c.category=? AND p.ts_utc>=? AND p.ts_utc<?"
+            )
+            if policy != "all":
+                sql += " AND c.is_primary=1"
+            for row in store.conn.execute(sql, (cat, start, end)):
+                if row["uid"] not in seen_uids:
+                    seen_uids.add(row["uid"])
+                    rows.append(row)
         for r in rows:
             try:
                 d = _json.loads(r["payload"])

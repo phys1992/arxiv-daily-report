@@ -86,15 +86,63 @@ class Paper:
 
 
 def _parse_iso(s: str) -> dt.datetime:
+    """解析 arXiv 的时间戳，**总是**返回带时区的 datetime。
+
+    arXiv API 的 ``published`` / ``updated`` 是 UTC（形如 ``2026-10-16T17:30:38Z``），
+    但也要能容忍别的写法：带显式偏移的照用，**不带时区的一律按 UTC 解释**。
+    这一点很关键——naive datetime 交给 ``astimezone()`` 会按本机时区解释，
+    在北京时间的机器上就会整体偏移 8 小时，把论文算到错误的那一天。
+    """
     if not s:
         return dt.datetime.now(dt.timezone.utc)
     try:
         return dt.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
     except ValueError:
-        try:
-            return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
-        except ValueError:
-            return dt.datetime.now(dt.timezone.utc)
+        pass
+    try:
+        value = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        log.warning("无法解析时间戳 %r，按当前时间处理", s)
+        return dt.datetime.now(dt.timezone.utc)
+    if value.tzinfo is None:                 # 没写时区 -> 按 arXiv 的约定当成 UTC
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value
+
+
+def day_bounds_utc(day: str | dt.date, tz: str = "Asia/Shanghai") -> tuple[dt.datetime, dt.datetime]:
+    """某时区的自然日 -> UTC 半开区间 ``[start, end)``。
+
+    报告日、抓取窗口、按日查询都走这个函数，时区只在换算这一步参与，
+    其他地方一律用 UTC 比较，避免「同一时刻在不同地方被算成不同天」。
+    """
+    from zoneinfo import ZoneInfo
+
+    d = dt.date.fromisoformat(day) if isinstance(day, str) else day
+    zone = ZoneInfo(tz)
+    start = dt.datetime(d.year, d.month, d.day, tzinfo=zone).astimezone(dt.timezone.utc)
+    return start, start + dt.timedelta(days=1)
+
+
+def month_bounds_utc(month: str, tz: str = "Asia/Shanghai") -> tuple[dt.datetime, dt.datetime]:
+    """某时区的自然月（YYYY-MM）-> UTC 半开区间 ``[start, end)``。"""
+    from zoneinfo import ZoneInfo
+
+    year, mon = (int(x) for x in str(month).split("-")[:2])
+    zone = ZoneInfo(tz)
+    start = dt.datetime(year, mon, 1, tzinfo=zone).astimezone(dt.timezone.utc)
+    nxt = dt.datetime(year + (mon // 12), (mon % 12) + 1, 1, tzinfo=zone)
+    return start, nxt.astimezone(dt.timezone.utc)
+
+
+def day_bounds_epoch(day: str | dt.date, tz: str = "Asia/Shanghai") -> tuple[int, int]:
+    """某时区自然日 -> UTC 的 (起始秒, 结束秒)，供数据库按整数比较。"""
+    start, end = day_bounds_utc(day, tz)
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def month_bounds_epoch(month: str, tz: str = "Asia/Shanghai") -> tuple[int, int]:
+    start, end = month_bounds_utc(month, tz)
+    return int(start.timestamp()), int(end.timestamp())
 
 
 def parse_arxiv_id(raw: str) -> tuple[str, int]:
