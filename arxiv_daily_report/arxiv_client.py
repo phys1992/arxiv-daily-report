@@ -26,6 +26,14 @@ from .models import Paper, parse_arxiv_id
 log = logging.getLogger(__name__)
 
 API = "https://export.arxiv.org/api/query"
+
+# ---- 官方约束（写死在代码里，不允许配得更激进）---------------------------
+# API 使用条款：https://info.arxiv.org/help/api/tou.html
+#   "make no more than one request every three seconds, and limit requests
+#    to a single connection at a time"
+API_MIN_INTERVAL = 3.05        # 秒；3 秒是硬要求，多留 50ms 抵消时钟抖动
+# arxiv.org/robots.txt：Crawl-delay: 15 —— 抓 /html 全文页必须按这个间隔
+CRAWL_DELAY = 15.0
 NS = {
     "a": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",
@@ -100,7 +108,11 @@ class ArxivClient:
         retries: int = 3,
         raw_dir: Path | None = None,
     ):
-        self.interval = max(0.0, float(interval_sec))
+        wanted = float(interval_sec)
+        self.interval = max(API_MIN_INTERVAL, wanted)
+        if wanted < 3.0:                      # 只有真的低于官方要求才提醒
+            log.warning("请求间隔 %.2fs 低于 arXiv 要求的每 3 秒 1 次，已按 %.2fs 执行",
+                        wanted, self.interval)
         self.timeout = int(timeout_sec)
         self.page_size = min(max(1, int(page_size)), 2000)
         self.max_pages = max(1, int(max_pages))

@@ -63,6 +63,42 @@ def assign(paper: Paper, subscribed: list[str], policy: str) -> dict[str, bool]:
     return {c: (c == chosen) for c in matched}
 
 
+# ---------------------------------------------------------------------------
+# 限流冷却：被 arXiv 说 "Rate exceeded" 之后，别在惩罚期里继续重试。
+# 条款明确禁止"attempt to circumvent rate limits"，持续试探只会延长封锁。
+# 冷却时间逐次加长：30 分钟 -> 2 小时 -> 6 小时
+# ---------------------------------------------------------------------------
+COOLDOWN_KEY = "arxiv_cooldown_until"
+COOLDOWN_COUNT_KEY = "arxiv_cooldown_count"
+COOLDOWN_STEPS = (1800, 7200, 21600)
+
+
+def cooldown_until(store: Store) -> dt.datetime | None:
+    raw = store.kv_get(COOLDOWN_KEY, "")
+    if not raw:
+        return None
+    try:
+        return dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def note_rate_limited(store: Store, reset: bool = False) -> dt.datetime:
+    """记一次限流，返回解禁时刻（逐次加长）。"""
+    level = 0 if reset else int(store.kv_get(COOLDOWN_COUNT_KEY, "0") or 0)
+    step = COOLDOWN_STEPS[min(level, len(COOLDOWN_STEPS) - 1)]
+    until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=step)
+    store.kv_set(COOLDOWN_KEY, until.isoformat())
+    store.kv_set(COOLDOWN_COUNT_KEY, str(level + 1))
+    return until
+
+
+def clear_cooldown(store: Store) -> None:
+    if store.kv_get(COOLDOWN_KEY, ""):
+        store.kv_set(COOLDOWN_KEY, "")
+        store.kv_set(COOLDOWN_COUNT_KEY, "0")
+
+
 def collect(
     cfg: Config,
     store: Store,
@@ -110,25 +146,67 @@ def collect(
     )
     say(f"目标报告日：{day}（{tz_name}）  扫描窗口：{res.window_start} ~ {res.window_end}")
 
+    # 惩罚期内不再请求，直接说明情况
+    until = cooldown_until(store)
+    if until is not None and dt.datetime.now(dt.timezone.utc) < until:
+        left = int((until - dt.datetime.now(dt.timezone.utc)).total_seconds() // 60) + 1
+        from .arxiv_client import ArxivRateLimited
+
+        raise ArxivRateLimited(
+            f"arXiv 正在限制本机请求（Rate exceeded），冷却中，约 {left} 分钟后恢复。"
+            "期间不会再请求 arXiv，以免延长封锁。"
+        )
+
+    from .arxiv_client import ArxivRateLimited as _RateLimited
+
+    # 已经抓过的旧日期不再重复请求：重跑历史日报时不该再打 arXiv。
+    # （定时任务跑的是「昨天」，距今 1 天，不受影响；只有 ≥2 天前才跳过。）
+    try:
+        today = dt.datetime.now(ZoneInfo(tz_name)).date()
+        age_days = (today - dt.date.fromisoformat(day)).days
+    except Exception:  # noqa: BLE001
+        age_days = 0
+    if age_days >= 2 and not only:
+        existing = store.all_papers_on(tz_name, day)
+        if existing:
+            say(f"  {day} 的论文已入库（{len(existing)} 篇），跳过网络请求")
+            counts: dict[str, int] = {c: 0 for c in subscribed}
+            for p in existing:
+                if p.primary_category in counts:
+                    counts[p.primary_category] += 1
+            res.per_category = counts
+            res.papers = existing
+            res.requests = 0
+            return res
+
     seen: set[str] = set()
-    for cat in subscribed:
-        n_cat = 0
-        for paper in client.iter_window(cat, start_dt, end_dt, tag=f"{cat}-{day}"):
-            res.total_scanned += 1
-            if not paper.is_new:
-                continue                      # 只统计首次公开的 v1
-            assignments = assign(paper, subscribed, cfg.get("crosslist_policy", "primary"))
-            if not assignments:
-                continue
-            if store.add_paper(paper, assignments):
-                res.new_papers += 1
-                seen.add(paper.uid)
-            if paper.day_str(tz_name) == day and assignments.get(cat):
-                n_cat += 1
-        res.per_category[cat] = n_cat
-        say(f"  {cat:<22} 当日归属 {n_cat} 篇")
-        for c in subscribed:
-            res.per_category.setdefault(c, 0)
+    try:
+        for cat in subscribed:
+            n_cat = 0
+            for paper in client.iter_window(cat, start_dt, end_dt, tag=f"{cat}-{day}"):
+                res.total_scanned += 1
+                if not paper.is_new:
+                    continue                      # 只统计首次公开的 v1
+                assignments = assign(paper, subscribed, cfg.get("crosslist_policy", "primary"))
+                if not assignments:
+                    continue
+                if store.add_paper(paper, assignments):
+                    res.new_papers += 1
+                    seen.add(paper.uid)
+                if paper.day_str(tz_name) == day and assignments.get(cat):
+                    n_cat += 1
+            res.per_category[cat] = n_cat
+            say(f"  {cat:<22} 当日归属 {n_cat} 篇")
+            for c in subscribed:
+                res.per_category.setdefault(c, 0)
+    except _RateLimited:
+        # arXiv 说"Rate exceeded"：记下解禁时刻，期间不再请求
+        until = note_rate_limited(store)
+        left = max(1, int((until - dt.datetime.now(dt.timezone.utc)).total_seconds() // 60))
+        say(f"  arXiv 限流：已进入 {left} 分钟冷却（到 {until:%H:%M}Z），期间不再请求")
+        raise
+    else:
+        clear_cooldown(store)
 
     res.requests = client.request_count
     res.papers = store.all_papers_on(tz_name, day)

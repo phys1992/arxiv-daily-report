@@ -541,39 +541,63 @@ Base URL 填例如 `http://127.0.0.1:11434/v1`，密钥可留空。
 ## 数据来源与合规
 
 - 论文元数据来自 **arXiv API**。元数据以 **CC0 1.0** 发布，可自由存储、转换与分享。
-- 遵守 arXiv 使用条款：**请求间隔可配置（默认 3 秒，即官方要求的「每 3 秒最多 1 次」）**、携带可识别 User-Agent；
-  本项目**不下载 PDF 全文**，读全文时抓的是 arXiv 自己生成的 HTML 页面，
-  且每篇只抓一次、结果缓存在本地，重复生成报告不会重复请求。
-  报告中一律链接到 arXiv 摘要页。
+- 遵守 arXiv [API 使用条款](https://info.arxiv.org/help/api/tou.html)：
+  - **每 3 秒最多 1 次请求，且同一时刻只有一条连接**（条款原文）。程序按 3 秒间隔
+    串行请求，并把这条下限**写死在代码里**——配置成更快也会被兜回 3 秒。
+  - 读取全文时抓的是 arXiv 自己生成的 HTML 页面，按 [robots.txt](https://arxiv.org/robots.txt)
+    的 `Crawl-delay: 15` 执行，即**每 15 秒最多请求 1 个页面**（同样写死为下限）。
+  - 每篇论文只抓一次，结果缓存在本地，重复生成报告不会重复请求。
+  - 不下载 PDF 或源码；报告中一律链接到 arXiv 摘要页。
+- **致谢**：本项目的报告页脚与本文档都包含 arXiv 要求的致谢
+  ——"Thank you to arXiv for use of its open access interoperability."
 - **建议在配置里填写 `fetch.contact`**（你的邮箱或仓库地址），它会出现在 User-Agent 中，
   便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.1.2 (arXiv API client; you@example.com)`。
 - 本项目与 arXiv.org **无任何官方关联**。
 
 ### 遇到 `HTTP 429 Too Many Requests`
 
-首次运行要回溯 7 天，请求较集中，**arXiv 限流是正常现象，不是程序故障**。
-程序会按 30 秒 / 1 分钟 / 2 分钟 / 4 分钟 / 5 分钟自动退避重试（合计约 12 分钟），
-并优先遵守服务端返回的 `Retry-After`。常驻服务在失败后也会在 5 / 15 / 30 分钟后自动重试，
-不会干等到第二天。
+**先说合规**：程序的请求节奏已经按官方条款收紧并写死下限——
+API 每 3 秒 1 次（串行单连接）、全文页面每 15 秒 1 次（robots.txt 的 Crawl-delay）。
+所以 429 不是"请求太快"造成的，而是 arXiv 对**共享 IP**（云主机、VPS、NAT 后面）
+的临时限流，属于正常现象。
 
-仍然失败时：
+程序的处理（全部按"不加重对方负担"设计）：
+
+1. 收到 429 先按 30 秒 / 1 分钟 / 2 分钟 / 4 分钟 / 5 分钟退避重试（约 12 分钟），
+   并优先遵守服务端返回的 `Retry-After`（单次等待封顶 300 秒）
+2. 仍失败则进入**冷却期**并记录到本地：**30 分钟 → 2 小时 → 6 小时** 逐次加长。
+   冷却期内**完全不请求 arXiv**（连启动补跑也会跳过），避免把限流拖成封禁
+3. 常驻服务在限流时按 **30 / 60 分钟** 重试（普通故障才是 5 / 15 / 30 分钟）
+4. **已经抓过的旧日期不再重复请求**：重跑一周前的日报直接读库，一次网络请求都不发
+5. 回溯窗口会把错过的日期补上，数据不会丢
+
+> arXiv 的 429 响应体只有一句 `Rate exceeded.`，且 `x-cache: MISS` ——
+> 说明未命中他们 CDN 缓存的请求都要打源站，源站对我们的 IP 有独立预算。
+> 云主机 / VPS / NAT 出口常被共享额度，遇到时**等待**即可，程序会自动恢复。
+
+想确认自己在按什么节奏请求：
 
 ```bash
-arxiv-daily-report daily          # 过几分钟再跑一次即可
+journalctl --user -u arxiv-daily-report -f      # 日志会打印每次退避的秒数
+arxiv-daily-report collect --day 2026-10-16     # 观察请求间隔
 ```
 
-反复出现就把请求放慢一些：
+如果长时间被限流，可以：
 
 ```jsonc
 {
   "fetch": {
-    "request_interval_sec": 5,      // 默认 3；放慢到 5 秒
-    "contact": "you@example.com"    // 建议填写，便于 arXiv 在流量异常时联系你
+    "request_interval_sec": 5,      // 默认 3（官方下限，改小无效）
+    "contact": "you@example.com"    // 建议填写，便于 arXiv 联系
   },
-  "schedule": { "catch_up_days": 3 } // 首次运行可把回溯天数调小（默认 7）
+  "fulltext": {
+    "throttle_seconds": 20          // 默认 15（robots.txt 下限，改小无效）
+  }
 }
 ```
-- 详见 [arXiv API Terms of Use](https://info.arxiv.org/help/api/tou.html)。
+
+> 全文抓取按每 15 秒 1 篇计算，30 篇的日报会多花约 7–8 分钟——它跑在后台定时任务里，
+> 不影响你早上看到报告。已经抓过的论文有缓存，重跑不会重复请求。
 
 ---
 

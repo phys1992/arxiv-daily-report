@@ -112,7 +112,8 @@ REPORT: dict[str, dict[str, str]] = {
         "report.theme_count": "{n} 篇",
         "report.paper_meta": "主分类 {primary} · 分类 {cats}",
         "report.updated_note": "本版含 {n} 篇延迟补录（补录于 {ts}）",
-        "report.footer": "数据来自 arXiv API（元数据 CC0），本项目与 arXiv.org 无官方关联。",
+        "report.footer": "数据来自 arXiv API（元数据 CC0）。感谢 arXiv 提供开放获取互操作性。"
+                           "本项目与 arXiv.org 无官方关联。",
         "report.no_llm": "（未启用模型摘要：以下仅为 arXiv 元数据）",
         "report.generated_by": "由 {model} 生成要点",
     },
@@ -127,7 +128,8 @@ REPORT: dict[str, dict[str, str]] = {
         "report.theme_count": "{n} papers",
         "report.paper_meta": "Primary {primary} · Categories {cats}",
         "report.updated_note": "This revision includes {n} late additions (added {ts})",
-        "report.footer": "Metadata from the arXiv API (CC0). This project is not affiliated with arXiv.org.",
+        "report.footer": "Metadata from the arXiv API (CC0). Thank you to arXiv for use of its "
+                           "open access interoperability. Not affiliated with arXiv.org.",
         "report.no_llm": "(Model summaries disabled: arXiv metadata only.)",
         "report.generated_by": "Summaries by {model}",
     },

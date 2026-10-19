@@ -1899,9 +1899,127 @@ class ArxivRateLimitTest(HermeticTestCase):
         self.assertLessEqual(max(_s.RETRY_DELAYS), 3600, "重试间隔不该长到一整天")
         src = inspect.getsource(_s.run_daemon)
         self.assertIn("retry_at", src)
-        self.assertIn("RETRY_DELAYS[failures - 1]", src)
+        self.assertIn("delays[failures - 1]", src)
         # 不要再出现「说 5 分钟后重试、实际等到明天」的写法
         self.assertNotIn('log.exception("本轮运行失败，%s 后重试", "5 分钟")', src)
+
+    def test_rate_limit_retries_are_slower_than_generic_failures(self):
+        """被限流时要等更久——5 分钟后再撞一次只会延长封锁。"""
+        from arxiv_daily_report.arxiv_client import ArxivRateLimited, ArxivError
+        from arxiv_daily_report.scheduler import RETRY_DELAYS, RETRY_DELAYS_RATE_LIMIT, _delays_for
+
+        self.assertEqual(_delays_for(ArxivRateLimited("x")), RETRY_DELAYS_RATE_LIMIT)
+        self.assertEqual(_delays_for(ArxivError("x")), RETRY_DELAYS)
+        self.assertGreater(min(RETRY_DELAYS_RATE_LIMIT), max(RETRY_DELAYS) / 2)
+
+
+class ArxivComplianceTest(HermeticTestCase):
+    """严格执行 arXiv 官方约束。"""
+
+    def test_api_interval_floor(self):
+        """ToU: 每 3 秒最多 1 次请求。配置得再快也必须兜住。"""
+        from arxiv_daily_report.arxiv_client import API_MIN_INTERVAL, ArxivClient
+
+        self.assertGreaterEqual(API_MIN_INTERVAL, 3.0)
+        self.assertEqual(ArxivClient(interval_sec=0).interval, API_MIN_INTERVAL)
+        self.assertEqual(ArxivClient(interval_sec=0.5).interval, API_MIN_INTERVAL)
+        # 比下限更慢的配置要尊重
+        self.assertEqual(ArxivClient(interval_sec=10).interval, 10.0)
+
+    def test_fulltext_respects_crawl_delay(self):
+        """arxiv.org/robots.txt 写着 Crawl-delay: 15，抓 /html 必须按这个间隔。"""
+        from arxiv_daily_report.arxiv_client import CRAWL_DELAY
+        from arxiv_daily_report.config import Config
+        from arxiv_daily_report.fulltext import FullTextService
+
+        self.assertGreaterEqual(CRAWL_DELAY, 15.0)
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json",
+                         overrides={"fulltext": {"throttle_seconds": 0.1}})
+            svc = FullTextService(None, cfg)
+            self.assertEqual(svc.throttle, CRAWL_DELAY)
+
+    def test_config_defaults_follow_official_limits(self):
+        from arxiv_daily_report.arxiv_client import API_MIN_INTERVAL, CRAWL_DELAY
+        from arxiv_daily_report.config import Config
+
+        from arxiv_daily_report.arxiv_client import ArxivClient
+
+        cfg = Config()
+        # 配置里写的是官方要求（3 秒）；客户端再自动留 50ms 余量
+        self.assertGreaterEqual(cfg["fetch"]["request_interval_sec"], 3.0)
+        self.assertGreaterEqual(
+            ArxivClient(interval_sec=cfg["fetch"]["request_interval_sec"]).interval,
+            API_MIN_INTERVAL)
+        self.assertGreaterEqual(cfg["fulltext"]["throttle_seconds"], CRAWL_DELAY)
+
+    def test_rate_limit_cooldown_escalates_and_blocks_requests(self):
+        """被限流后要进入冷却，期间不再请求 arXiv。"""
+        import datetime as _dt
+
+        from arxiv_daily_report import collect as _c
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            store = Store(tmp / "s.sqlite3")
+            try:
+                self.assertIsNone(_c.cooldown_until(store))
+                first = _c.note_rate_limited(store)
+                self.assertGreater(first, _dt.datetime.now(_dt.timezone.utc))
+                got = _c.cooldown_until(store)
+                self.assertIsNotNone(got)
+                self.assertTrue(_c.COOLDOWN_STEPS[0] - 5
+                                < (got - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
+                                <= _c.COOLDOWN_STEPS[0])
+                # 再次被限流 -> 等更久
+                second_gap = (_c.note_rate_limited(store)
+                              - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
+                self.assertGreater(second_gap, _c.COOLDOWN_STEPS[0])
+
+                # 冷却期内 collect 必须直接失败，不碰网络
+                cfg = Config(path=tmp / "c.json", overrides={
+                    "paths": {"data": str(tmp / "d"), "cache": str(tmp / "k"),
+                              "reports": str(tmp / "r")}})
+                from arxiv_daily_report.arxiv_client import ArxivRateLimited as _RL
+
+                with self.assertRaises(_RL):
+                    _c.collect(cfg, store, day="2026-10-13")
+
+                _c.clear_cooldown(store)
+                self.assertIsNone(_c.cooldown_until(store))
+            finally:
+                store.close()
+
+    def test_old_days_are_not_refetched(self):
+        """已经抓过的旧日期重跑时不再请求 arXiv —— 限流环境下尤其重要。"""
+        from arxiv_daily_report import collect as _c
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "c.json", overrides={
+                "paths": {"data": str(tmp / "d"), "cache": str(tmp / "k"),
+                          "reports": str(tmp / "r")}})
+            store = Store(tmp / "d" / "state.sqlite3")
+            try:
+                paper = make_paper(aid="2610.5")
+                paper.updated = "2026-09-01T02:00:00Z"
+                paper.published = paper.updated
+                store.add_paper(paper, {"gr-qc": True})
+                res = _c.collect(cfg, store, day="2026-09-01",
+                                 progress=lambda m: None)
+                self.assertEqual(res.requests, 0, "旧日期不应再联网")
+                self.assertEqual(len(res.papers), 1)
+            finally:
+                store.close()
+
+    def test_report_acknowledges_arxiv(self):
+        """arXiv API Access 页要求产品中致谢。"""
+        from arxiv_daily_report.i18n import rt
+
+        for lang in ("zh", "en"):
+            text = rt(lang, "report.footer")
+            self.assertIn("arXiv", text)
+        self.assertIn("open access interoperability", rt("en", "report.footer"))
 
 
 class PackageVerifierTest(HermeticTestCase):

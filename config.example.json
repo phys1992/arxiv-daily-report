@@ -54,7 +54,7 @@
     "enabled": true,
     "source": "auto",
     "max_chars": 4000,
-    "throttle_seconds": 1.0,
+    "throttle_seconds": 15.0,
     "timeout_seconds": 30
   },
   "report": {

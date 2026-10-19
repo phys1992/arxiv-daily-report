@@ -18,6 +18,15 @@ log = logging.getLogger(__name__)
 # 一轮失败后的重试间隔（秒）：5 分钟、15 分钟、30 分钟。
 # 用完之后就放弃这一轮，等下一次定时任务——幂等 + 回溯窗口会把缺的那天补回来。
 RETRY_DELAYS = (300, 900, 1800)
+# 被 arXiv 限流时等得更久：对方明确说「请求太快」，5 分钟后就再撞一次没有意义。
+RETRY_DELAYS_RATE_LIMIT = (1800, 3600)
+
+
+def _delays_for(exc: Exception) -> tuple[int, ...]:
+    """限流与普通故障用不同的重试节奏。"""
+    from .arxiv_client import ArxivRateLimited
+
+    return RETRY_DELAYS_RATE_LIMIT if isinstance(exc, ArxivRateLimited) else RETRY_DELAYS
 
 
 def _parse_hhmm(s: str) -> tuple[int, int]:
@@ -95,7 +104,7 @@ def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
             store.kv_set("last_fire", last_fire)
         except Exception as exc:  # noqa: BLE001
             failures = 1
-            delay = RETRY_DELAYS[0]
+            delay = _delays_for(exc)[0]
             retry_at = dt.datetime.now(tz) + dt.timedelta(seconds=delay)
             log.warning("启动补跑失败（%s），%d 分钟后重试",
                         str(exc)[:200], delay // 60)
@@ -127,8 +136,9 @@ def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
             return
         except Exception as exc:  # noqa: BLE001
             failures += 1
-            if failures <= len(RETRY_DELAYS):
-                delay = RETRY_DELAYS[failures - 1]
+            delays = (_delays_for(exc))
+            if failures <= len(delays):
+                delay = delays[failures - 1]
                 retry_at = dt.datetime.now(tz) + dt.timedelta(seconds=delay)
                 log.warning("本轮运行失败（第 %d 次）：%s；%d 分钟后重试",
                             failures, str(exc)[:200], delay // 60)
