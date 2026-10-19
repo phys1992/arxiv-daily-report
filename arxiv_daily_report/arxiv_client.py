@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 from .models import Paper, parse_arxiv_id
 
@@ -110,6 +110,7 @@ class ArxivClient:
         user_agent: str = "",
         retries: int = 3,
         raw_dir: Path | None = None,
+        on_success: Callable[[], None] | None = None,
     ):
         wanted = float(interval_sec)
         self.interval = max(API_MIN_INTERVAL, wanted)
@@ -125,6 +126,8 @@ class ArxivClient:
         self.ua = user_agent or default_user_agent()
         self.retries = max(1, int(retries))
         self.raw_dir = raw_dir
+        # 每次请求成功后回调：用于把限流冷却的等级归零
+        self.on_success = on_success
         self._last_request = 0.0
         self.request_count = 0
 
@@ -157,6 +160,11 @@ class ArxivClient:
                         raw = gzip.decompress(raw)
                 self._last_request = time.monotonic()
                 self.request_count += 1
+                if self.on_success is not None:
+                    try:
+                        self.on_success()
+                    except Exception:  # noqa: BLE001 - 回调失败不影响抓取
+                        pass
                 text = raw.decode("utf-8", errors="replace")
                 self._dump_raw(text, tag)
                 return text

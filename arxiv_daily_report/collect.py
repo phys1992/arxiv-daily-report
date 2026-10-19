@@ -66,11 +66,14 @@ def assign(paper: Paper, subscribed: list[str], policy: str) -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 # 限流冷却：被 arXiv 说 "Rate exceeded" 之后，别在惩罚期里继续重试。
 # 条款明确禁止"attempt to circumvent rate limits"，持续试探只会延长封锁。
-# 冷却时间逐次加长：30 分钟 -> 2 小时 -> 6 小时
+#
+# 实测（2026-10-19）：停手后约 44 秒即可恢复，限流是速率限制而非定时封禁。
+# 因此起步只要 5 分钟；若仍失败再逐级加长，封顶 30 分钟。
+# 任何一次请求成功后就归零，下次重新从 5 分钟开始。
 # ---------------------------------------------------------------------------
 COOLDOWN_KEY = "arxiv_cooldown_until"
 COOLDOWN_COUNT_KEY = "arxiv_cooldown_count"
-COOLDOWN_STEPS = (1800, 7200, 21600)
+COOLDOWN_STEPS = (300, 600, 1200, 1800)      # 5 / 10 / 20 / 30 分钟（封顶）
 
 
 def cooldown_until(store: Store) -> dt.datetime | None:
@@ -137,6 +140,8 @@ def collect(
         user_agent=(fetch.get("user_agent") or default_user_agent(fetch.get("contact", ""))),
         retries=sched.get("retry", 3),
         raw_dir=raw_dir,
+        # 任意一次请求成功 -> 冷却归零，下次限流重新从 5 分钟起
+        on_success=lambda: clear_cooldown(store),
     )
 
     res = CollectResult(

@@ -1972,10 +1972,18 @@ class ArxivComplianceTest(HermeticTestCase):
                 self.assertTrue(_c.COOLDOWN_STEPS[0] - 5
                                 < (got - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
                                 <= _c.COOLDOWN_STEPS[0])
-                # 再次被限流 -> 等更久
+                # 首次 5 分钟，逐级加长，封顶 30 分钟
+                self.assertEqual(_c.COOLDOWN_STEPS[0], 300)
+                self.assertEqual(max(_c.COOLDOWN_STEPS), 1800)
                 second_gap = (_c.note_rate_limited(store)
                               - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
                 self.assertGreater(second_gap, _c.COOLDOWN_STEPS[0])
+                # 加到头之后不再增长
+                for _ in range(6):
+                    _c.note_rate_limited(store)
+                capped = (_c.cooldown_until(store)
+                          - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
+                self.assertLessEqual(capped, _c.COOLDOWN_STEPS[-1] + 5)
 
                 # 冷却期内 collect 必须直接失败，不碰网络
                 cfg = Config(path=tmp / "c.json", overrides={
@@ -1988,6 +1996,45 @@ class ArxivComplianceTest(HermeticTestCase):
 
                 _c.clear_cooldown(store)
                 self.assertIsNone(_c.cooldown_until(store))
+            finally:
+                store.close()
+
+    def test_success_resets_cooldown_to_five_minutes(self):
+        """一次请求成功后就归零，下次限流重新从 5 分钟开始。"""
+        from unittest import mock
+
+        from arxiv_daily_report import collect as _c
+        from arxiv_daily_report.arxiv_client import ArxivClient
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                for _ in range(3):
+                    _c.note_rate_limited(store)
+                self.assertGreaterEqual(int(store.kv_get(_c.COOLDOWN_COUNT_KEY, "0")), 3)
+
+                class Resp:
+                    headers = {"Content-Encoding": ""}
+
+                    def read(self):
+                        return b"<feed></feed>"
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+
+                client = ArxivClient(on_success=lambda: _c.clear_cooldown(store))
+                with mock.patch("urllib.request.urlopen", return_value=Resp()):
+                    client._get({"search_query": "cat:gr-qc"})
+                self.assertIsNone(_c.cooldown_until(store))
+                self.assertEqual(store.kv_get(_c.COOLDOWN_COUNT_KEY, "0"), "0")
+                # 再被限流 -> 回到 5 分钟
+                gap = (_c.note_rate_limited(store)
+                       - __import__("datetime").datetime.now(
+                           __import__("datetime").timezone.utc)).total_seconds()
+                self.assertLessEqual(gap, _c.COOLDOWN_STEPS[0] + 5)
             finally:
                 store.close()
 
