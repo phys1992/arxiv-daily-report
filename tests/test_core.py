@@ -1611,7 +1611,6 @@ class BackfillTest(HermeticTestCase):
         with tempfile.TemporaryDirectory() as td:
             cfg, store = self._setup(Path(td))
             try:
-                store.kv_set("first_run_day", "2026-10-10")
                 for day in ("2026-10-10", "2026-10-11", "2026-10-12"):
                     self._add(store, day)
                 store.record_report("2026-10-10", "gr-qc", "/r/a.pdf", 1)
@@ -1628,7 +1627,6 @@ class BackfillTest(HermeticTestCase):
         with tempfile.TemporaryDirectory() as td:
             cfg, store = self._setup(Path(td))
             try:
-                store.kv_set("first_run_day", "2026-10-10")
                 self._add(store, "2026-10-10")
                 got = missing_days(cfg, store, today="2026-10-15")
                 self.assertEqual(got, [("2026-10-10", "gr-qc")])
@@ -1643,7 +1641,6 @@ class BackfillTest(HermeticTestCase):
         with tempfile.TemporaryDirectory() as td:
             cfg, store = self._setup(Path(td))
             try:
-                store.kv_set("first_run_day", "2026-10-12")
                 self._add(store, "2026-10-12")
                 self._add(store, "2026-10-13")
                 got = missing_days(cfg, store, today="2026-10-13")
@@ -1658,7 +1655,7 @@ class BackfillTest(HermeticTestCase):
             tmp = Path(td)
             cfg, store = self._setup(tmp)
             try:
-                store.kv_set("first_run_day", "2026-10-10")
+                store.kv_set("initial_backfill_done", "1")   # 模拟非初次运行
                 for day in ("2026-10-10", "2026-10-11", "2026-10-12"):
                     self._add(store, day)
                 # 单次上限 2 天 -> 只补最早两天
@@ -1678,7 +1675,7 @@ class BackfillTest(HermeticTestCase):
         with tempfile.TemporaryDirectory() as td:
             cfg, store = self._setup(Path(td))
             try:
-                store.kv_set("first_run_day", "2026-10-10")
+                store.kv_set("initial_backfill_done", "1")
                 self._add(store, "2026-10-10")
                 backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
                 again = backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
@@ -1686,17 +1683,28 @@ class BackfillTest(HermeticTestCase):
             finally:
                 store.close()
 
-    def test_fresh_install_does_not_backfill_history(self):
-        """刚装上还没有任何报告时，不能凭空刷出一整月的历史报告。"""
-        from arxiv_daily_report.report_daily import missing_days
+    def test_first_run_backfills_whole_month(self):
+        """初次运行要把当月缺的日报一次补齐，不受单次上限限制。"""
+        from arxiv_daily_report.report_daily import backfill_missing, missing_days
 
         with tempfile.TemporaryDirectory() as td:
             cfg, store = self._setup(Path(td))
             try:
-                for day in ("2026-10-10", "2026-10-11", "2026-10-12"):
+                days = [f"2026-10-{d:02d}" for d in (2, 3, 5, 6, 8, 9)]
+                for day in days:
                     self._add(store, day)
-                # 没有 first_run_day、也没有任何历史报告
-                self.assertEqual(missing_days(cfg, store, today="2026-10-15"), [])
+                found = [d for d, _c in missing_days(cfg, store, today="2026-10-15")]
+                self.assertEqual(found, days)
+                # 配置的单次上限是 2，但初次运行应忽略它
+                self.assertEqual(cfg["schedule"]["backfill_max_per_run"], 2)
+                out = backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
+                self.assertEqual(len(out), len(days), "初次运行应一次补齐当月")
+                for day in days:
+                    self.assertTrue(store.report_exists(day, "gr-qc"))
+                self.assertEqual(store.kv_get("initial_backfill_done", ""), "1")
+                # 之后再跑不应重复生成
+                self.assertEqual(
+                    backfill_missing(cfg, store, use_llm=False, progress=lambda m: None), [])
             finally:
                 store.close()
 
@@ -1707,7 +1715,11 @@ class BackfillTest(HermeticTestCase):
         with tempfile.TemporaryDirectory() as td:
             cfg, store = self._setup(Path(td))
             try:
-                self.assertEqual(_auto_lookback(cfg, store, "2026-10-19"), 7)
+                # 首次运行：覆盖当月（10-01 ~ 10-19 共 19 天）
+                self.assertEqual(_auto_lookback(cfg, store, "2026-10-19"), 19)
+                # 首次运行但目标日在月初：7 天就够覆盖到 1 号
+                self.assertEqual(_auto_lookback(cfg, store, "2026-10-02"), 7)
+                # 之后按停机天数扩展
                 store.kv_set("last_success_day", "2026-10-10")
                 self.assertEqual(_auto_lookback(cfg, store, "2026-10-19"), 10)
                 store.kv_set("last_success_day", "2026-08-01")

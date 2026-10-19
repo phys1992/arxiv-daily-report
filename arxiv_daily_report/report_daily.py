@@ -293,7 +293,14 @@ def _auto_lookback(cfg: Config, store: Store, day: str) -> int:
         return base
     last = store.kv_get("last_success_day", "")
     if not last:
-        return base
+        # 首次运行：把「当月」整段都抓下来，否则月初那几天没有论文数据，
+        # 后面的补缺也就补不出来。
+        try:
+            target = dt.date.fromisoformat(day)
+        except ValueError:
+            return base
+        since_month = (target - target.replace(day=1)).days + 1
+        return min(max(base, since_month), max(base, cap))
     try:
         gap = (dt.date.fromisoformat(day) - dt.date.fromisoformat(last)).days
     except ValueError:
@@ -326,14 +333,8 @@ def missing_days(cfg: Config, store: Store, *, today: str | None = None,
     month_start = last.replace(day=1)
     if month_start > first:
         first = max(first, month_start)
-    # 不补「程序启用之前」的日期：起点取 first_run_day（首次运行日），
-    # 兼容老库时退回"已生成报告的最早一天"。全新安装时两者都没有，
-    # 此时不做补缺，避免一装上就刷出整月历史报告和对应的模型开销。
-    start = store.kv_get("first_run_day", "") or store.earliest_report_day()
-    if not start:
-        return []
-    if start[:10] > first.isoformat():
-        first = dt.date.fromisoformat(start[:10])
+    # 范围就是「当月 1 号 ~ 昨天」：首次运行会把整月补齐，之后每次续补。
+    first = max(first, month_start)
 
     cats = enabled_categories(cfg)
     if not cats:
@@ -366,14 +367,19 @@ def backfill_missing(
               if limit is None else limit)
     pending = missing_days(cfg, store)
     if not pending:
-        say("补缺检查：最近没有缺失的日报")
+        say("补缺检查：当月没有缺失的日报")
         return []
 
     days = sorted({d for d, _c in pending})
+    initial = not store.kv_get("initial_backfill_done", "")
+    if initial:
+        cap = len(days)                    # 初次运行：当月一次补齐
     say(f"补缺检查：发现 {len(days)} 天缺日报（{days[0]} ~ {days[-1]}）")
     if len(days) > cap:
         say(f"  本次先补最早的 {cap} 天，其余下次继续")
         days = days[:cap]
+    elif initial:
+        say(f"  初次运行：一次补齐这 {len(days)} 天")
 
     math = MathService(store, assets_dir=cfg.assets_dir,
                        backend=cfg["report"].get("math_backend", "auto"))
@@ -400,6 +406,8 @@ def backfill_missing(
         write_index(cfg, store, day)
     if produced:
         say(f"补缺完成：生成 {len(produced)} 份报告")
+    if initial and len(days) == len({d for d, _c in pending}):
+        store.kv_set("initial_backfill_done", "1")
     return produced
 
 
