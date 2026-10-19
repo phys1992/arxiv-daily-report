@@ -120,6 +120,41 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(args.verbose)
     cfg, store = get_ctx(args)
 
+    try:
+        return _dispatch(args, cfg, store, ap)
+    except Exception as exc:  # noqa: BLE001 - 统一转成可读提示，不要甩 traceback
+        return _report_failure(exc)
+
+
+def _report_failure(exc: Exception) -> int:
+    """把常见故障翻译成用户能照做的提示，而不是 Python traceback。"""
+    from .arxiv_client import ArxivError, ArxivRateLimited
+
+    if isinstance(exc, ArxivRateLimited):
+        print(f"  arXiv 限流：{exc}", file=sys.stderr)
+        print("  arXiv 对 API 请求有严格限制（每 3 秒最多 1 次），这是临时状态，不是故障。", file=sys.stderr)
+        print("  等几分钟再执行一次即可：arxiv-daily-report daily", file=sys.stderr)
+        print("  若反复出现，可以把 fetch.request_interval_sec 调大（默认 3 秒），", file=sys.stderr)
+        print("  或把 schedule.catch_up_days 调小（默认 7 天）。", file=sys.stderr)
+        return 3
+    if isinstance(exc, ArxivError):
+        print(f"  arXiv 请求失败：{exc}", file=sys.stderr)
+        print("  检查网络连通性与 arXiv 服务状态后重试。", file=sys.stderr)
+        return 3
+    print(f"  执行失败：{exc}", file=sys.stderr)
+    if args_verbose_hint():
+        raise exc
+    print("  加 -v 可以看到完整堆栈。", file=sys.stderr)
+    return 1
+
+
+def args_verbose_hint() -> bool:
+    import logging
+
+    return logging.getLogger().isEnabledFor(logging.DEBUG)
+
+
+def _dispatch(args, cfg, store, ap) -> int:
     if not args.cmd:
         print_welcome(cfg, store, prog=ap.prog)
         return 0

@@ -1572,6 +1572,151 @@ class RepoHygieneTest(HermeticTestCase):
             self.assertTrue((PROJECT / rel).is_file(), f"{rel} 缺失")
 
 
+class ArxivRateLimitTest(HermeticTestCase):
+    """arXiv 限流处理：首次安装最常见的故障就是 429。"""
+
+    def _client(self, **kw):
+        from arxiv_daily_report.arxiv_client import ArxivClient
+
+        return ArxivClient(**kw)
+
+    def test_client_works_without_explicit_user_agent(self):
+        """曾经这里引用了未定义的 API_VERSION，只因调用方总传 UA 才没炸。"""
+        c = self._client()
+        self.assertTrue(c.ua)
+        self.assertIn("arxiv-daily-report", c.ua)
+
+    def test_retry_after_parsing(self):
+        from arxiv_daily_report.arxiv_client import _parse_retry_after
+
+        self.assertEqual(_parse_retry_after("120"), 120.0)
+        self.assertEqual(_parse_retry_after(" 0 "), 0.0)
+        self.assertIsNone(_parse_retry_after(""))
+        self.assertIsNone(_parse_retry_after(None))
+        self.assertIsNone(_parse_retry_after("nonsense"))
+        # HTTP 日期形式也要能算出一个正数
+        far = _parse_retry_after("Wed, 21 Oct 2099 07:28:00 GMT")
+        self.assertIsNotNone(far)
+        self.assertGreater(far, 0)
+
+    def test_429_backs_off_then_raises_rate_limited(self):
+        """429 要按长退避重试多次，最后抛 ArxivRateLimited（而不是普通 ArxivError）。"""
+        from unittest import mock
+
+        import urllib.error
+
+        from arxiv_daily_report import arxiv_client as ac
+
+        sleeps: list[float] = []
+        err = urllib.error.HTTPError("http://x", 429, "Too Many Requests", {}, None)
+        with mock.patch.object(ac.time, "sleep", sleeps.append), \
+             mock.patch("urllib.request.urlopen", side_effect=err):
+            with self.assertRaises(ac.ArxivRateLimited):
+                self._client()._get({"search_query": "cat:gr-qc"})
+        # 去掉请求间隔（3 秒）后，剩下的就是退避序列
+        backoff = [s for s in sleeps if s > 20]
+        self.assertEqual(backoff, list(ac.RATE_LIMIT_BACKOFF))
+
+    def test_429_honours_retry_after_header_but_caps_it(self):
+        from unittest import mock
+
+        import urllib.error
+
+        from arxiv_daily_report import arxiv_client as ac
+
+        # Retry-After 给一个很远的日期，等待必须被封顶
+        hdrs = {"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"}
+        err = urllib.error.HTTPError("http://x", 429, "Too Many Requests", hdrs, None)
+        sleeps: list[float] = []
+        with mock.patch.object(ac.time, "sleep", sleeps.append), \
+             mock.patch("urllib.request.urlopen", side_effect=err):
+            with self.assertRaises(ac.ArxivRateLimited):
+                self._client()._get({"search_query": "cat:gr-qc"})
+        self.assertLessEqual(max(sleeps), ac.RATE_LIMIT_MAX_WAIT)
+
+    def test_other_4xx_is_not_retried(self):
+        from unittest import mock
+
+        import urllib.error
+
+        from arxiv_daily_report import arxiv_client as ac
+
+        err = urllib.error.HTTPError("http://x", 400, "Bad Request", {}, None)
+        calls = []
+        with mock.patch.object(ac.time, "sleep", lambda s: calls.append(s)), \
+             mock.patch("urllib.request.urlopen", side_effect=err):
+            with self.assertRaises(ac.ArxivError) as ctx:
+                self._client()._get({"search_query": "cat:gr-qc"})
+        self.assertNotIsInstance(ctx.exception, ac.ArxivRateLimited)
+        self.assertEqual(calls, [], "4xx 不应该重试")
+
+    def test_success_after_transient_429(self):
+        """限流一次后恢复：应当成功返回，而不是直接失败。"""
+        from unittest import mock
+
+        import urllib.error
+
+        from arxiv_daily_report import arxiv_client as ac
+
+        err = urllib.error.HTTPError("http://x", 429, "Too Many Requests", {}, None)
+
+        class Resp:
+            headers = {"Content-Encoding": ""}
+
+            def read(self):
+                return b"<feed></feed>"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        sleeps: list[float] = []
+        with mock.patch.object(ac.time, "sleep", sleeps.append), \
+             mock.patch("urllib.request.urlopen", side_effect=[err, Resp()]):
+            text = self._client()._get({"search_query": "cat:gr-qc"})
+        self.assertEqual(text, "<feed></feed>")
+        self.assertIn(ac.RATE_LIMIT_BACKOFF[0], sleeps)
+
+
+    def test_cli_reports_rate_limit_without_traceback(self):
+        """CLI 要把限流翻译成能照做的提示，而不是甩堆栈。"""
+        import contextlib
+        import io
+        from unittest import mock
+
+        from arxiv_daily_report import cli
+        from arxiv_daily_report.arxiv_client import ArxivRateLimited
+
+        def boom(*_a, **_k):
+            raise ArxivRateLimited("arXiv API 限流（HTTP 429），已退避重试 5 次仍未通过")
+
+        err = io.StringIO()
+        with mock.patch("arxiv_daily_report.report_daily.run_daily", side_effect=boom), \
+             contextlib.redirect_stderr(err):
+            code = cli.main(["daily"])
+        self.assertEqual(code, 3)
+        msg = err.getvalue()
+        self.assertIn("限流", msg)
+        self.assertIn("request_interval_sec", msg)   # 给出可操作建议
+        self.assertNotIn("Traceback", msg)
+
+    def test_scheduler_retries_after_failure(self):
+        """失败后要在几分钟内重试，而不是干等第二天的定时。"""
+        import inspect
+
+        from arxiv_daily_report import scheduler as _s
+
+        self.assertTrue(_s.RETRY_DELAYS)
+        self.assertLessEqual(max(_s.RETRY_DELAYS), 3600, "重试间隔不该长到一整天")
+        src = inspect.getsource(_s.run_daemon)
+        self.assertIn("retry_at", src)
+        self.assertIn("RETRY_DELAYS[failures - 1]", src)
+        # 不要再出现「说 5 分钟后重试、实际等到明天」的写法
+        self.assertNotIn('log.exception("本轮运行失败，%s 后重试", "5 分钟")', src)
+
+
 class PackageVerifierTest(HermeticTestCase):
     """安装包校验器：必须能真正读到内层文件（deb 用 bsdtar 只能看到 ar 成员）。"""
 

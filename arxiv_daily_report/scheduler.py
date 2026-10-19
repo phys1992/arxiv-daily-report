@@ -15,6 +15,10 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 
+# 一轮失败后的重试间隔（秒）：5 分钟、15 分钟、30 分钟。
+# 用完之后就放弃这一轮，等下一次定时任务——幂等 + 回溯窗口会把缺的那天补回来。
+RETRY_DELAYS = (300, 900, 1800)
+
 
 def _parse_hhmm(s: str) -> tuple[int, int]:
     try:
@@ -78,7 +82,11 @@ def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
     log.info("调度器启动：模式=%s 时刻=%s 时区=%s",
              sched.get("mode"), sched.get("time"), sched.get("timezone"))
 
-    # 启动即补跑：幂等 + 回溯窗口，能自动修复关机期间的空缺
+    # 启动即补跑：幂等 + 回溯窗口，能自动修复关机期间的空缺。
+    # 失败也要安排重试——首次安装时 arXiv 限流是很常见的情况，
+    # 不能因此干等到第二天的定时任务。
+    retry_at: dt.datetime | None = None
+    failures = 0
     if sched.get("mode") != "manual":
         try:
             log.info("启动补跑：生成最近一期日报")
@@ -86,16 +94,24 @@ def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
             last_fire = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
             store.kv_set("last_fire", last_fire)
         except Exception as exc:  # noqa: BLE001
-            log.exception("启动补跑失败：%s", exc)
+            failures = 1
+            delay = RETRY_DELAYS[0]
+            retry_at = dt.datetime.now(tz) + dt.timedelta(seconds=delay)
+            log.warning("启动补跑失败（%s），%d 分钟后重试",
+                        str(exc)[:200], delay // 60)
+            log.debug("启动补跑的完整异常", exc_info=True)
 
     while True:
         try:
             cfg.load()                     # 支持运行中热更新配置
             tz = ZoneInfo(cfg["schedule"].get("timezone", "Asia/Shanghai"))
             now = dt.datetime.now(tz)
-            nxt = next_fire(cfg, now)
-            wait = max(30.0, min((nxt - now).total_seconds(), 3600.0))
-            log.info("下次运行：%s（%.0f 秒后）", nxt.strftime("%Y-%m-%d %H:%M"), wait)
+            target = retry_at if retry_at is not None else next_fire(cfg, now)
+            wait = max(30.0, min((target - now).total_seconds(), 3600.0))
+            if retry_at is not None:
+                log.info("重试本轮：%.0f 秒后（之前失败 %d 次）", wait, failures)
+            else:
+                log.info("下次运行：%s（%.0f 秒后）", target.strftime("%Y-%m-%d %H:%M"), wait)
             time.sleep(wait)
 
             cfg.load()
@@ -105,9 +121,19 @@ def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
             log.info("触发日报生成：%s", stamp)
             run_once(cfg, store)
             store.kv_set("last_fire", stamp)
+            retry_at, failures = None, 0
         except KeyboardInterrupt:
             log.info("调度器收到中断，退出")
             return
         except Exception as exc:  # noqa: BLE001
-            log.exception("本轮运行失败，%s 后重试", "5 分钟")
-            time.sleep(300)
+            failures += 1
+            if failures <= len(RETRY_DELAYS):
+                delay = RETRY_DELAYS[failures - 1]
+                retry_at = dt.datetime.now(tz) + dt.timedelta(seconds=delay)
+                log.warning("本轮运行失败（第 %d 次）：%s；%d 分钟后重试",
+                            failures, str(exc)[:200], delay // 60)
+            else:
+                log.error("已连续失败 %d 次，本轮放弃，等下一次定时任务"
+                          "（回溯窗口会把缺的那天补上）", failures)
+                retry_at, failures = None, 0
+            log.debug("本轮失败的完整异常", exc_info=True)

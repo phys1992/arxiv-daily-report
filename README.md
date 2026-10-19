@@ -82,13 +82,13 @@
 
 ```bash
 # Debian / Ubuntu
-sudo apt install ./arxiv-daily-report_0.1.0-1_amd64.deb
+sudo apt install ./arxiv-daily-report_0.1.1-1_amd64.deb
 
 # Fedora / RHEL
-sudo dnf install ./arxiv-daily-report-0.1.0-1.x86_64.rpm
+sudo dnf install ./arxiv-daily-report-0.1.1-1.x86_64.rpm
 
 # Arch / Manjaro
-sudo pacman -U ./arxiv-daily-report-0.1.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./arxiv-daily-report-0.1.1-1-x86_64.pkg.tar.zst
 ```
 
 安装后命令是 `arxiv-daily-report`。三种包安装到相同位置，便于统一维护：
@@ -538,13 +538,38 @@ Base URL 填例如 `http://127.0.0.1:11434/v1`，密钥可留空。
 ## 数据来源与合规
 
 - 论文元数据来自 **arXiv API**。元数据以 **CC0 1.0** 发布，可自由存储、转换与分享。
-- 遵守 arXiv 使用条款：**请求间隔可配置（默认 1 秒）**、携带可识别 User-Agent；
+- 遵守 arXiv 使用条款：**请求间隔可配置（默认 3 秒，即官方要求的「每 3 秒最多 1 次」）**、携带可识别 User-Agent；
   本项目**不下载 PDF 全文**，读全文时抓的是 arXiv 自己生成的 HTML 页面，
   且每篇只抓一次、结果缓存在本地，重复生成报告不会重复请求。
   报告中一律链接到 arXiv 摘要页。
 - **建议在配置里填写 `fetch.contact`**（你的邮箱或仓库地址），它会出现在 User-Agent 中，
-  便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.1.0 (arXiv API client; you@example.com)`。
+  便于 arXiv 在流量异常时联系你：`arxiv-daily-report/0.1.1 (arXiv API client; you@example.com)`。
 - 本项目与 arXiv.org **无任何官方关联**。
+
+### 遇到 `HTTP 429 Too Many Requests`
+
+首次运行要回溯 7 天，请求较集中，**arXiv 限流是正常现象，不是程序故障**。
+程序会按 30 秒 / 1 分钟 / 2 分钟 / 4 分钟 / 5 分钟自动退避重试（合计约 12 分钟），
+并优先遵守服务端返回的 `Retry-After`。常驻服务在失败后也会在 5 / 15 / 30 分钟后自动重试，
+不会干等到第二天。
+
+仍然失败时：
+
+```bash
+arxiv-daily-report daily          # 过几分钟再跑一次即可
+```
+
+反复出现就把请求放慢一些：
+
+```jsonc
+{
+  "fetch": {
+    "request_interval_sec": 5,      // 默认 3；放慢到 5 秒
+    "contact": "you@example.com"    // 建议填写，便于 arXiv 在流量异常时联系你
+  },
+  "schedule": { "catch_up_days": 3 } // 首次运行可把回溯天数调小（默认 7）
+}
+```
 - 详见 [arXiv API Terms of Use](https://info.arxiv.org/help/api/tou.html)。
 
 ---
@@ -609,7 +634,7 @@ verified against that day's paper list.
 Install (Linux only):
 
 ```bash
-sudo apt install ./arxiv-daily-report_0.1.0-1_amd64.deb   # or dnf / pacman -U
+sudo apt install ./arxiv-daily-report_0.1.1-1_amd64.deb   # or dnf / pacman -U
 pip install --user weasyprint          # PDF backend (packaged on Arch as python-weasyprint)
 arxiv-daily-report serve               # configure the LLM provider in the web UI
 systemctl --user enable --now arxiv-daily-report   # auto-start, no root required

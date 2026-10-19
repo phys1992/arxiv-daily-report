@@ -50,6 +50,44 @@ class ArxivError(RuntimeError):
     pass
 
 
+class ArxivRateLimited(ArxivError):
+    """被 arXiv 限流（HTTP 429），重试也没能通过。
+
+    单独一个类型，方便上层决定「等一会再跑」还是「直接失败」。
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+# 遇到 429 时的退避序列（秒）。限流是「等一等就过去」的问题，
+# 重试次数比普通错误多、间隔也更长；总等待上限约 13 分钟。
+RATE_LIMIT_BACKOFF = (30.0, 60.0, 120.0, 240.0, 300.0)
+# 单次等待的上限：Retry-After 可能是个很远的日期，不能真的照着睡下去
+RATE_LIMIT_MAX_WAIT = 300.0
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """解析 Retry-After：可能是秒数，也可能是 HTTP 日期。"""
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(value)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=dt.timezone.utc)
+        return max(0.0, (when - dt.datetime.now(dt.timezone.utc)).total_seconds())
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class ArxivClient:
     def __init__(
         self,
@@ -66,7 +104,7 @@ class ArxivClient:
         self.timeout = int(timeout_sec)
         self.page_size = min(max(1, int(page_size)), 2000)
         self.max_pages = max(1, int(max_pages))
-        self.ua = user_agent or API_VERSION
+        self.ua = user_agent or default_user_agent()
         self.retries = max(1, int(retries))
         self.raw_dir = raw_dir
         self._last_request = 0.0
@@ -81,7 +119,10 @@ class ArxivClient:
     def _get(self, params: dict[str, str], tag: str = "") -> str:
         url = API + "?" + urllib.parse.urlencode(params, safe=":")
         last: Exception | None = None
-        for attempt in range(1, self.retries + 1):
+        hint: float | None = None            # 服务端给的 Retry-After
+        limited = 0                          # 已经因为 429 重试了几次
+        normal = 0                           # 普通错误重试了几次
+        while True:
             self._throttle()
             req = urllib.request.Request(
                 url,
@@ -101,19 +142,48 @@ class ArxivClient:
                 text = raw.decode("utf-8", errors="replace")
                 self._dump_raw(text, tag)
                 return text
-            except urllib.error.HTTPError as exc:  # 4xx 不重试
+            except urllib.error.HTTPError as exc:
                 self._last_request = time.monotonic()
                 last = exc
-                if 400 <= exc.code < 500 and exc.code not in (408, 429):
+                if exc.code == 429:
+                    # 限流：优先听服务端给的 Retry-After，否则用较长的退避序列
+                    hint = _parse_retry_after(exc.headers.get("Retry-After")) or hint
+                    if limited >= len(RATE_LIMIT_BACKOFF):
+                        raise ArxivRateLimited(
+                            f"arXiv API 限流（HTTP 429），已退避重试 {limited} 次仍未通过",
+                            retry_after=hint,
+                        ) from exc
+                    wait = max(RATE_LIMIT_BACKOFF[limited], hint or 0.0)
+                    wait = min(wait, RATE_LIMIT_MAX_WAIT)
+                    limited += 1
+                    log.warning(
+                        "arXiv 限流（HTTP 429），%.0f 秒后重试（第 %d/%d 次）",
+                        wait, limited, len(RATE_LIMIT_BACKOFF),
+                    )
+                    time.sleep(wait)
+                    continue
+                if 400 <= exc.code < 500 and exc.code != 408:      # 其他 4xx 不重试
                     raise ArxivError(f"arXiv API 返回 {exc.code}: {exc.reason}") from exc
-                log.warning("arXiv API %s（第 %d 次），退避重试", exc.code, attempt)
+                normal += 1
+                if normal >= self.retries:
+                    raise ArxivError(
+                        f"arXiv 请求连续 {normal} 次失败：{exc}") from exc
+                wait = min(60.0, 2.0 ** normal * 3)
+                log.warning("arXiv API %s（第 %d/%d 次），%.0f 秒后重试",
+                            exc.code, normal, self.retries, wait)
+                time.sleep(wait)
             except Exception as exc:  # noqa: BLE001
                 self._last_request = time.monotonic()
                 last = exc
-                log.warning("arXiv 请求失败（第 %d 次）：%s", attempt, exc)
-            if attempt < self.retries:
-                time.sleep(min(60.0, 2.0 ** attempt * 3))
-        raise ArxivError(f"arXiv 请求连续 {self.retries} 次失败：{last}")
+                normal += 1
+                if normal >= self.retries:
+                    raise ArxivError(
+                        f"arXiv 请求连续 {normal} 次失败：{exc}") from exc
+                wait = min(60.0, 2.0 ** normal * 3)
+                log.warning("arXiv 请求失败（第 %d/%d 次），%.0f 秒后重试：%s",
+                            normal, self.retries, wait, exc)
+                time.sleep(wait)
+        raise ArxivError(f"arXiv 请求失败：{last}")
 
     def _dump_raw(self, text: str, tag: str) -> None:
         if not self.raw_dir or not tag:
