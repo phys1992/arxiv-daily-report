@@ -233,7 +233,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # ---- 抓取 ----
     "fetch": {
         "page_size": 100,
-        "request_interval_sec": 3.0,   # arXiv ToU：每 3 秒最多 1 次（下限已写死）
+        "request_interval_sec": 5.0,   # arXiv 要求 ≥3 秒；本项目保守用 5 秒（下限写死）
         "timeout_sec": 60,
         "user_agent": "",              # 空则按 contact 自动生成
         "contact": "",                 # 建议填写邮箱或仓库地址，便于 arXiv 联系你
@@ -265,7 +265,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,               # 日报摘要是否结合论文全文的结论/讨论部分
         "source": "auto",              # auto | arxiv-html | ar5iv
         "max_chars": 4000,             # 每篇送入模型的结论原文上限（字符）
-        "throttle_seconds": 15.0,      # arxiv.org/robots.txt: Crawl-delay 15
+        "throttle_seconds": 20.0,      # robots.txt 要求 ≥15 秒；本项目保守用 20 秒
         "timeout_seconds": 30,
     },
     "report": {

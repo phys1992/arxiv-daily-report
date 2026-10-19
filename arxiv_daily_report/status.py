@@ -128,6 +128,30 @@ def _storage_hint(cfg: Config, store: Store | None = None) -> str:
             f"，缓存 {human(u['raw_bytes'])}")
 
 
+def _arxiv_hint(cfg: Config, store: Store | None = None) -> str:
+    """请求节奏 + 当前是否处于限流冷却期。"""
+    try:
+        from .arxiv_client import API_MIN_INTERVAL, CRAWL_DELAY
+        from .collect import cooldown_until
+
+        api = cfg["fetch"].get("request_interval_sec", 5.0)
+        ft = cfg.get("fulltext", {}).get("throttle_seconds", 20.0)
+        base = (f"API 每 {max(API_MIN_INTERVAL, float(api)):.0f} 秒 1 次 · "
+                f"全文每 {max(CRAWL_DELAY, float(ft)):.0f} 秒 1 篇")
+        if store is None:
+            return base
+        until = cooldown_until(store)
+        if until is None:
+            return base + " · 未限流"
+        now = dt.datetime.now(dt.timezone.utc)
+        if until <= now:
+            return base + " · 冷却已结束"
+        left = int((until - now).total_seconds() // 60) + 1
+        return base + f" · 限流冷却中，约 {left} 分钟后解除（{until:%H:%M}Z）"
+    except Exception as exc:  # noqa: BLE001
+        return f"无法读取（{exc}）"
+
+
 def _fonts() -> dict:
     """当前预设实际会用到的字体（用于状态展示）。"""
     from .render import resolved_fonts
@@ -174,6 +198,7 @@ def render_status(cfg: Config, store: Store) -> str:
         f"                  中文 {_fonts()['cjk']}",
         f"  配置界面        {_web_hint(cfg)}",
         f"  缓存清理        {_cache_hint(cfg, store)}",
+        f"  arXiv 请求      {_arxiv_hint(cfg, store)}",
         f"  存储占用        {_storage_hint(cfg, store)}",
         "",
         f"  订阅分类        {s['category_count']} 个：{', '.join(s['categories'])}",

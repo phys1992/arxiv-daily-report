@@ -260,8 +260,8 @@ class FullTextService:
         self.enabled = bool(conf.get("enabled", True))
         self.source = str(conf.get("source", "auto") or "auto")
         self.timeout = float(conf.get("timeout_seconds", 30) or 30)
-        # arxiv.org/robots.txt 要求 Crawl-delay: 15 —— 这里不允许配得更小
-        wanted = float(conf.get("throttle_seconds", 15.0) or 15.0)
+        # arxiv.org/robots.txt 要求 Crawl-delay: 15；本项目保守用 20 秒，且不允许配得更小
+        wanted = float(conf.get("throttle_seconds", 20.0) or 20.0)
         from .arxiv_client import CRAWL_DELAY
 
         self.throttle = max(CRAWL_DELAY, wanted)

@@ -31,7 +31,7 @@
   },
   "fetch": {
     "page_size": 100,
-    "request_interval_sec": 3.0,
+    "request_interval_sec": 5.0,
     "timeout_sec": 60,
     "user_agent": "",
     "contact": "",
@@ -54,7 +54,7 @@
     "enabled": true,
     "source": "auto",
     "max_chars": 4000,
-    "throttle_seconds": 15.0,
+    "throttle_seconds": 20.0,
     "timeout_seconds": 30
   },
   "report": {

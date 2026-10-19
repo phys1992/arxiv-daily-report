@@ -31,9 +31,12 @@ API = "https://export.arxiv.org/api/query"
 # API 使用条款：https://info.arxiv.org/help/api/tou.html
 #   "make no more than one request every three seconds, and limit requests
 #    to a single connection at a time"
-API_MIN_INTERVAL = 3.05        # 秒；3 秒是硬要求，多留 50ms 抵消时钟抖动
-# arxiv.org/robots.txt：Crawl-delay: 15 —— 抓 /html 全文页必须按这个间隔
-CRAWL_DELAY = 15.0
+# 官方最低要求是每 3 秒 1 次；本项目主动放慢到 5 秒，留出足够余量，
+# 避免在共享出口（云主机/VPS）上触发对方的限流。
+API_MIN_INTERVAL = 5.05        # 秒；5 秒 + 50ms 抵消时钟抖动
+# arxiv.org/robots.txt：Crawl-delay: 15 —— 抓 /html 全文页至少 15 秒；
+# 本项目主动放慢到 20 秒。
+CRAWL_DELAY = 20.0
 NS = {
     "a": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",
@@ -110,9 +113,12 @@ class ArxivClient:
     ):
         wanted = float(interval_sec)
         self.interval = max(API_MIN_INTERVAL, wanted)
-        if wanted < 3.0:                      # 只有真的低于官方要求才提醒
+        if wanted < 3.0:                      # 真的低于官方要求 -> 明确告警
             log.warning("请求间隔 %.2fs 低于 arXiv 要求的每 3 秒 1 次，已按 %.2fs 执行",
                         wanted, self.interval)
+        elif wanted < API_MIN_INTERVAL:        # 介于官方要求与本项目保守值之间
+            log.debug("请求间隔 %.2fs 已按本项目的保守下限 %.2fs 执行",
+                      wanted, self.interval)
         self.timeout = int(timeout_sec)
         self.page_size = min(max(1, int(page_size)), 2000)
         self.max_pages = max(1, int(max_pages))

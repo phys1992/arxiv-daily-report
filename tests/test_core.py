@@ -1917,10 +1917,10 @@ class ArxivComplianceTest(HermeticTestCase):
     """严格执行 arXiv 官方约束。"""
 
     def test_api_interval_floor(self):
-        """ToU: 每 3 秒最多 1 次请求。配置得再快也必须兜住。"""
+        """ToU 要求每 3 秒最多 1 次；本项目主动放慢到 5 秒。"""
         from arxiv_daily_report.arxiv_client import API_MIN_INTERVAL, ArxivClient
 
-        self.assertGreaterEqual(API_MIN_INTERVAL, 3.0)
+        self.assertGreaterEqual(API_MIN_INTERVAL, 5.0, "本项目下限应比官方更保守")
         self.assertEqual(ArxivClient(interval_sec=0).interval, API_MIN_INTERVAL)
         self.assertEqual(ArxivClient(interval_sec=0.5).interval, API_MIN_INTERVAL)
         # 比下限更慢的配置要尊重
@@ -1932,7 +1932,8 @@ class ArxivComplianceTest(HermeticTestCase):
         from arxiv_daily_report.config import Config
         from arxiv_daily_report.fulltext import FullTextService
 
-        self.assertGreaterEqual(CRAWL_DELAY, 15.0)
+        self.assertGreaterEqual(CRAWL_DELAY, 15.0, "不得低于 robots.txt 的 Crawl-delay")
+        self.assertGreaterEqual(CRAWL_DELAY, 20.0, "本项目按 20 秒执行")
         with tempfile.TemporaryDirectory() as td:
             cfg = Config(path=Path(td) / "c.json",
                          overrides={"fulltext": {"throttle_seconds": 0.1}})
@@ -1951,7 +1952,7 @@ class ArxivComplianceTest(HermeticTestCase):
         self.assertGreaterEqual(
             ArxivClient(interval_sec=cfg["fetch"]["request_interval_sec"]).interval,
             API_MIN_INTERVAL)
-        self.assertGreaterEqual(cfg["fulltext"]["throttle_seconds"], CRAWL_DELAY)
+        self.assertGreaterEqual(cfg["fulltext"]["throttle_seconds"], 20.0)
 
     def test_rate_limit_cooldown_escalates_and_blocks_requests(self):
         """被限流后要进入冷却，期间不再请求 arXiv。"""
