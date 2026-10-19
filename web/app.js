@@ -75,6 +75,8 @@
     providers: [],         // /api/providers
     providerMap: {},
     modelOptions: [],      // 连接测试返回的模型列表
+    modelCache: {},        // provider|base_url -> 模型列表（避免重复请求）
+    modelsFor: '',         // 当前 modelOptions 对应的 key
     catGroups: [],         // /api/categories 的分组
     catNames: {},          // code -> 官方名称
     catTotal: 0,
@@ -358,6 +360,34 @@
     else if (src) hint = t('llm.api_key_source_file', { mask: mask });
     else hint = t('llm.api_key_source_none');
     $('#api-key-hint').textContent = hint + ' · ' + t('llm.api_key_keep');
+  }
+
+  /** 有可用密钥时，自动从 API 拉一次模型列表（静默：失败不弹提示）。 */
+  function autoFetchModels(force) {
+    var provider = $('#llm-provider').value;
+    if (!provider) return;
+    var typed = state.apiKeys[provider];
+    var hasKey = (typed && typed.indexOf('••') !== 0) || !!(state.masked[provider]);
+    if (!hasKey) { renderModelOptions(); return; }   // 没密钥就别打扰 API
+
+    var baseUrl = $('#llm-base-url').value || '';
+    var key = (provider + '|' + baseUrl).toLowerCase();
+    if (!force && state.modelCache[key]) {
+      state.modelOptions = state.modelCache[key];
+      state.modelsFor = key;
+      renderModelOptions();
+      return;
+    }
+    api.post('/api/test-connection', testPayload()).then(function (res) {
+      if (res && res.ok && res.models && res.models.length) {
+        state.modelCache[key] = res.models;
+        state.modelOptions = res.models;
+        state.modelsFor = key;
+        renderModelOptions();
+      } else {
+        renderModelOptions();          // 拿不到就保持隐藏，不报错
+      }
+    }).catch(function () { renderModelOptions(); });
   }
 
   function renderModelOptions() {
@@ -746,6 +776,7 @@
     ensureTimezoneOption();
     applyValues();
     syncProviderUI();
+    autoFetchModels();          // 载入后自动从 API 取模型列表
     renderCategoryTree();
     applyCategoryFilter($('#cat-search').value);
     renderSubCards();
@@ -942,6 +973,10 @@
       res = res || {};
       if (res.ok && res.models && res.models.length) {
         state.modelOptions = res.models;
+        var _key = (($('#llm-provider').value || '') + '|' +
+                    ($('#llm-base-url').value || '')).toLowerCase();
+        state.modelCache[_key] = res.models;
+        state.modelsFor = _key;
         renderModelOptions();
         toast(t('toast.models_ok') + ' · ' + t('llm.models_loaded', { n: res.models.length }), 'ok');
         showTestBox(t('llm.test_ok', { ms: res.latency_ms, msg: res.message || '' }), 'ok');
@@ -1063,6 +1098,7 @@
         setPath(state.config, 'llm.model', model);
       }
       syncProviderUI();
+      autoFetchModels();          // 换厂商后按新厂商的密钥/地址重新拉列表
     });
     $('#api-key').addEventListener('input', function () {
       var provider = $('#llm-provider').value;

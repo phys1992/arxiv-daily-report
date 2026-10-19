@@ -1629,6 +1629,30 @@ class WebControlTest(HermeticTestCase):
         self.assertIn("$('#llm-model')", block, "选中的模型要填进模型输入框")
         self.assertIn("hidden = false", block, "拉到列表后要显示下拉框")
 
+    def test_model_list_is_fetched_from_api_not_hardcoded(self):
+        """模型列表必须来自接口，不能只显示厂商的默认模型。
+
+        之前下拉框要手动点按钮才出现，页面加载后只看到配置里那个默认模型。
+        """
+        js = self._js()
+        self.assertIn("function autoFetchModels", js)
+        self.assertIn("/api/test-connection", js)
+        # 载入后与切换厂商时都要自动拉取
+        render_all = js[js.index("function renderAll"):]
+        render_all = render_all[:render_all.index("\n  }\n")]
+        self.assertIn("autoFetchModels()", render_all, "载入后应自动获取模型列表")
+        # 没有密钥时不要打扰接口
+        block = js[js.index("function autoFetchModels"):]
+        block = block[:block.index("\n  }\n")]
+        self.assertIn("hasKey", block)
+        self.assertIn("return", block)
+
+    def test_model_list_is_cached_per_endpoint(self):
+        """同一 provider + base_url 不要反复请求。"""
+        js = self._js()
+        self.assertIn("modelCache", js)
+        self.assertIn("state.modelCache[key]", js)
+
     def test_timezone_custom_value_is_preserved(self):
         """配置里的时区若不在下拉列表中，不能被静默改回默认值。"""
         js = self._js()
