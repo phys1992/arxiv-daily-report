@@ -43,8 +43,8 @@ def status_dict(cfg: Config, store: Store) -> dict:
                             cfg["llm"].get("provider", "deepseek")), 3),
         },
         "next_run": next_run_time(cfg),
-        "reports": reports,
-        "runs": runs,
+        "reports": _localize_rows(reports, "generated_at", cfg),
+        "runs": _localize_rows(runs, "started_at", cfg),
         "paths": {
             "config": str(cfg.config_home),
             "data": str(cfg.data_dir),
@@ -252,8 +252,25 @@ def _web_hint(cfg: Config) -> str:
     return url + tail
 
 
-def _fmt_time(iso: str, tz: str) -> str:
-    """把库里存的 UTC 时间按配置时区显示。"""
+def _localize_rows(rows: list[dict], field: str, cfg: Config) -> list[dict]:
+    """把一行行记录里的 UTC 时间戳换成本地显示字符串（就地改）。
+
+    放在 status_dict 里是为了让 CLI 与 Web 用同一份结果：
+    两边各自换算的话，很容易一边改成两次、一边漏掉。
+    """
+    tz = cfg["schedule"].get("timezone", "Asia/Shanghai")
+    for row in rows:
+        if row.get(field):
+            row[field] = fmt_local_time(row[field], tz)
+    return rows
+
+
+def fmt_local_time(iso: str, tz: str) -> str:
+    """把库里存的 UTC 时间按配置时区显示。
+
+    数据库里一律存 UTC（无歧义），显示时才换算；Web 界面与 CLI 共用这一个函数，
+    免得两边出现时区不一致。
+    """
     import datetime as _dt
     from zoneinfo import ZoneInfo
 
@@ -308,7 +325,5 @@ def render_status(cfg: Config, store: Store) -> str:
     lines.append("")
     lines.append("  最近运行：")
     for r in s["runs"][:6]:
-        tz_name = cfg["schedule"].get("timezone", "Asia/Shanghai")
-        lines.append(f"    {_fmt_time(r['started_at'], tz_name)}  {r['status']:<8} "
-                     f"{(r['detail'] or '')[:60]}")
+        lines.append(f"    {r['started_at']}  {r['status']:<8} {(r['detail'] or '')[:60]}")
     return "\n".join(lines)

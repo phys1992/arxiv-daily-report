@@ -430,14 +430,22 @@ document.getElementById('f').addEventListener('submit',function(e){{
         if route == "status":
             from .status import status_dict
 
-            self._json(status_dict(cfg, store))
+            self._json(status_dict(cfg, store))     # 时间已在 status_dict 里本地化
             return
         if route == "job":
             self._json(JOBS.snapshot())
             return
         if route == "reports":
-            self._json({"reports": store.list_reports("daily", limit=200),
-                        "monthly": store.list_reports("monthly", limit=36)})
+            from .status import fmt_local_time
+
+            tz = cfg["schedule"].get("timezone", "Asia/Shanghai")
+            def _local(rows):
+                for row in rows:
+                    if row.get("generated_at"):
+                        row["generated_at"] = fmt_local_time(row["generated_at"], tz)
+                return rows
+            self._json({"reports": _local(store.list_reports("daily", limit=200)),
+                        "monthly": _local(store.list_reports("monthly", limit=36))})
             return
         self._json({"error": "unknown route"}, 404)
 

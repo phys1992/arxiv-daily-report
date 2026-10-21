@@ -1794,9 +1794,33 @@ class DigestPreserveTest(HermeticTestCase):
             finally:
                 store.close()
 
+    def test_status_dict_localizes_times(self):
+        """status_dict 必须把 reports/runs 的时间换成本地，Web 与 CLI 共用。"""
+        from arxiv_daily_report.status import status_dict
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "c.json", overrides={
+                "schedule": {"timezone": "Asia/Shanghai"},
+                "paths": {"data": str(tmp / "d"), "cache": str(tmp / "k"),
+                          "reports": str(tmp / "r")}})
+            store = Store(tmp / "d" / "state.sqlite3")
+            try:
+                store.record_report("2026-10-20", "gr-qc", "/x.pdf", 3, kind="daily")
+                store.start_run("daily 2026-10-20")
+                d = status_dict(cfg, store)
+                self.assertTrue(d["reports"])
+                for r in d["reports"]:
+                    self.assertNotIn("T", r["generated_at"], "不应残留 UTC 的 T 分隔")
+                    self.assertFalse(r["generated_at"].endswith("Z"))
+                for r in d["runs"]:
+                    self.assertFalse(r["started_at"].endswith("Z"))
+            finally:
+                store.close()
+
     def test_status_times_are_local(self):
         """库里存 UTC，status 要按配置时区显示。"""
-        from arxiv_daily_report.status import _fmt_time
+        from arxiv_daily_report.status import fmt_local_time as _fmt_time
 
         self.assertEqual(_fmt_time("2026-10-21T10:37:37Z", "Asia/Shanghai"),
                          "2026-10-21 18:37")
