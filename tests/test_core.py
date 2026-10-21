@@ -1581,6 +1581,77 @@ class RepoHygieneTest(HermeticTestCase):
             self.assertTrue((PROJECT / rel).is_file(), f"{rel} 缺失")
 
 
+class MathRenderTest(HermeticTestCase):
+    """公式排版：安装包里没有 MathJax，必须能靠 matplotlib 排出真正的公式。"""
+
+    def test_unicode_fallback_has_no_latex_residue(self):
+        r"""降级路径过去会把 \left 当成 \le 替换成「≤ft」。"""
+        from arxiv_daily_report.mathrender import unicode_math
+
+        got = unicode_math(r"\left(\frac{a}{b}\right)^{1/2}")
+        self.assertNotIn("≤ft", got)
+        self.assertNotIn("\\", got)
+
+        got = unicode_math(r"\Omega_{\rm b}=0.05")
+        self.assertNotIn("Ωₘ", got)          # 过去把 \rm 的 r/m 当成了下标
+        self.assertIn("Ω", got)
+
+        self.assertIn("≤", unicode_math(r"a \le b"))
+        self.assertIn("∈", unicode_math(r"x \in [0,1]"))
+
+    def test_matplotlib_backend_renders_svg(self):
+        """有 matplotlib 时应当产出内联 SVG，而不是纯文本。"""
+        from arxiv_daily_report.mathrender import _matplotlib_ready, matplotlib_svg
+
+        if not _matplotlib_ready():
+            self.skipTest("本机没有 matplotlib")
+        from arxiv_daily_report.mathrender import _matplotlib_setup
+
+        _matplotlib_setup()
+        svg = matplotlib_svg(r"H_0=71.4^{+2.2}_{-2.5}")
+        self.assertTrue(svg.startswith("<svg"))
+        self.assertIn("em", svg[:400])              # 尺寸换算成 em
+        self.assertIn("vertical-align", svg[:400])  # 按深度对齐基线
+        self.assertNotIn("<text", svg)              # 字形必须转成路径
+
+    def test_service_uses_matplotlib_when_mathjax_missing(self):
+        """MathJax 不可用时，公式仍要排出来（走 matplotlib）。"""
+        from arxiv_daily_report.mathrender import MathService, _matplotlib_ready
+
+        if not _matplotlib_ready():
+            self.skipTest("本机没有 matplotlib")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            store = Store(tmp / "s.sqlite3")
+            try:
+                # 显式指定 matplotlib，确定性覆盖「没有 MathJax」的路径
+                svc = MathService(store, assets_dir=PROJECT / "assets", backend="matplotlib")
+                self.assertFalse(svc.mathjax_available)
+                text = "得到 $H_0=71.4$ 与 $|a|<m$。"
+                svc.prepare([text])
+                html = svc.to_html(text)
+                self.assertIn("<svg", html)
+                self.assertNotIn("math-unicode", html)
+                self.assertEqual(svc.report_stats()["unicode"], 0)
+            finally:
+                store.close()
+
+    def test_unicode_backend_is_forced_when_configured(self):
+        from arxiv_daily_report.mathrender import MathService
+
+        with tempfile.TemporaryDirectory() as td:
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                svc = MathService(store, assets_dir=PROJECT / "assets", backend="unicode")
+                self.assertFalse(svc.mathjax_available)
+                self.assertFalse(svc.matplotlib_available)
+                text = "得到 $H_0=71.4$。"
+                svc.prepare([text])
+                self.assertIn("math-unicode", svc.to_html(text))
+            finally:
+                store.close()
+
+
 class BackfillTest(HermeticTestCase):
     """补缺：运行时检查当月已生成的报告，把「有论文但没出报告」的日期补上。"""
 

@@ -281,7 +281,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "font_preset": "arxiv",
         "font_family": "",             # 非空则完全覆盖预设（任意 CSS 字体列表）
         "font_file": "",               # 可选：额外的字体文件，会内联并置于栈首
-        "math_backend": "auto",        # auto | mathjax | unicode
+        # auto：优先 MathJax（需 node + node_modules），否则 matplotlib，最后 Unicode
+        # mathjax | matplotlib | unicode：强制指定
+        "math_backend": "auto",
         "include_daily_highlights": True,
         "include_abstract_note": True,
         "author_limit": 3,             # 参考文献中作者超过该数则 et al.

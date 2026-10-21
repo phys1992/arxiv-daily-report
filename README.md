@@ -25,7 +25,7 @@
 | **按自然日切分** | 报告日按 `Asia/Shanghai`（可配置成任意时区）自然日切分；自动回溯 7 天，周末/节假日延迟公告也能补录 |
 | **结合全文** | 抓取 arXiv 官方 HTML，读取论文的**结论/讨论/总结**小节原文，与摘要一起交给模型；抓不到全文（老论文等）时如实降级为仅摘要 |
 | **PDF 报告** | 页码、页眉、PDF 书签、可点击链接；默认按 arXiv 预印本排版——西文与公式用 **Computer Modern**，汉字用 **思源宋体**；缺字体时自动回退并在日志里提示 |
-| **公式排版** | MathJax 预渲染成 SVG（与 LaTeX 输出同一套 Computer Modern 字形），按公式哈希缓存 |
+| **公式排版** | 公式预渲染成内联 SVG，按公式哈希缓存。优先 MathJax；没有 Node 时用 **matplotlib mathtext**（同为 Computer Modern 字形），都不行才退到 Unicode 近似 |
 | **论文清单** | 每篇给出作者、标题、arXiv 号与可点击链接（由代码从元数据生成，模型不参与） |
 | **月度简报** | **每月 1 号**自动依据上一个自然月的日报浓缩：一段概览 + 主要进展 + 分主题要点；**重要文献在对应日期后附 arXiv 号**，号逐条核对确属该日 |
 | **Web 配置界面** | 模型/调度/路径/字体/语言/分类订阅全部可视化配置，改完即时生效；本机直接打开即可，无需令牌 |
@@ -162,7 +162,10 @@ sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 
 sudo dnf install pango cairo gdk-pixbuf2                                           # Fedora
 sudo pacman -S pango cairo gdk-pixbuf2                                             # Arch
 
-# 3) 字体（推荐装这两套，缺了会自动回退）
+# 3) 公式排版（不装则公式会退化成纯文本）
+pip install --user matplotlib
+
+# 4) 字体（推荐装这两套，缺了会自动回退）
 #    西文/公式：Computer Modern（arXiv 预印本字体）
 sudo apt install fonts-lmodern        # Debian/Ubuntu；Arch: sudo pacman -S otf-latin-modern
 #    中文：思源宋体
@@ -216,8 +219,21 @@ sudo dnf install google-noto-serif-cjk-fonts          # Fedora
 也可以完全自定义：`report.font_family` 填任意 CSS 字体列表（会覆盖预设），
 或用 `report.font_file` 内联一个字体文件。
 
-> **数学字体**：公式由 MathJax 预渲染成 SVG，用的是 **Computer Modern 字形轮廓**——
-> 与 LaTeX 输出一致，无需额外配置。
+> **数学公式**：`$...$` 里的 LaTeX 会被预渲染成内联 SVG，与正文一起排版。
+> 后端按顺序尝试：
+>
+> 1. **MathJax**（需要 `node` + `node_modules/mathjax-full`，默认不随包分发）
+> 2. **matplotlib mathtext**（纯 Python，字形同样是 Computer Modern，推荐）
+> 3. **Unicode 近似**（最后的兜底，观感明显更差）
+>
+> 装上 matplotlib 就能得到接近 LaTeX 的排版：
+>
+> ```bash
+> pip install --user matplotlib     # Debian / Ubuntu / Fedora
+> sudo pacman -S python-matplotlib  # Arch（安装包已作为依赖）
+> ```
+>
+> 用 `arxiv-daily-report status` 或看日志可确认实际用的是哪个后端。
 
 ---
 

@@ -52,18 +52,30 @@ _SUP = str.maketrans("0123456789+-=()ni", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼�
 _SUB = str.maketrans("0123456789+-=()aeoxhklmnpst", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₒₓₕₖₗₘₙₚₛₜ")
 
 
+def _sub_text(text: str) -> str:
+    """把下标内容转成 Unicode 下标；无法映射的字符保留原样。"""
+    text = re.sub(r"\\[a-zA-Z]+ ?", "", text)
+    return "".join(_SUB.get(ch, ch) for ch in text)
+
+
 def unicode_math(tex: str) -> str:
-    """把一段 LaTeX 数学源码转成 Unicode 近似文本（确定性）。"""
+    """把一段 LaTeX 数学源码转成 Unicode 近似文本（确定性）。
+
+    这是最后的兜底：没有 MathJax 也没有 matplotlib 时才会用到。
+    """
     s = tex
+    # 先去掉 \left \right 这类不带符号的命令，否则 \left 会被 \le 前缀
+    # 替换成「≤ft」；符号替换也改成整词匹配。
+    s = re.sub(r"\\left|\\right|\\bigl|\\bigr|\\Bigl|\\Bigr|\\big|\\Big", "", s)
     for k in sorted(_SYMBOLS, key=len, reverse=True):
-        s = s.replace(k, _SYMBOLS[k])
+        s = re.sub(re.escape(k) + r"(?![A-Za-z])", lambda m, v=_SYMBOLS[k]: v, s)
     s = re.sub(r"\\text\{([^}]*)\}", r"\1", s)
     s = re.sub(r"\\mathrm\{([^}]*)\}", r"\1", s)
     s = re.sub(r"\\mathcal\{([^}]*)\}", r"\1", s)
     s = re.sub(r"\\frac\{([^{}]*)\}\{([^{}]*)\}", r"(\1)/(\2)", s)
     s = re.sub(r"\^\{([^{}]*)\}", lambda m: m.group(1).translate(_SUP), s)
     s = re.sub(r"\^(\w)", lambda m: m.group(1).translate(_SUP), s)
-    s = re.sub(r"_\{([^{}]*)\}", lambda m: m.group(1).translate(_SUB), s)
+    s = re.sub(r"_\{([^{}]*)\}", lambda m: _sub_text(m.group(1)), s)
     s = re.sub(r"_(\w)", lambda m: m.group(1).translate(_SUB), s)
     s = re.sub(r"\\[a-zA-Z]+", "", s)
     return s.replace("{", "").replace("}", "").replace("$", "").strip()
@@ -83,12 +95,90 @@ def _fix_svg(svg: str, tex: str = "") -> str:
     return svg
 
 
+# ---------------------------------------------------------------------------
+# matplotlib 后端：用 mathtext 排成 SVG（字形转路径，不依赖 Node 与系统字体）
+#
+# 安装包只带 render.js，没有 node_modules/mathjax-full，所以 MathJax 在常规
+# 装机环境中不可用；这条后端保证「没有 Node 也能排出真正的公式」。
+# mathtext 用 Computer Modern 字形，与本报告西文字体一致。
+# ---------------------------------------------------------------------------
+_MATH_BASE_PT = 10.0          # 渲染基准字号，换算 em 时除以它
+
+
+def _set_mplconfigdir() -> None:
+    """matplotlib 默认往 ~/.config 写缓存；家目录只读时改到缓存目录。"""
+    import os
+
+    if os.environ.get("MPLCONFIGDIR"):
+        return
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    for target in (os.path.join(cache, "matplotlib"), None):
+        if target is None:                       # 兜底：临时目录
+            import tempfile
+            target = tempfile.mkdtemp(prefix="adr-mpl-")
+        try:
+            os.makedirs(target, exist_ok=True)
+            probe = os.path.join(target, ".w")
+            with open(probe, "w"):
+                pass
+            os.unlink(probe)
+        except OSError:
+            continue
+        os.environ["MPLCONFIGDIR"] = target
+        return
+
+
+def _matplotlib_ready() -> bool:
+    _set_mplconfigdir()
+    try:
+        import matplotlib  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def _matplotlib_setup() -> None:
+    """一次性配置：不弹窗、字形转路径、Computer Modern 字形。"""
+    _set_mplconfigdir()
+    import matplotlib
+
+    matplotlib.use("svg")
+    matplotlib.rcParams["mathtext.fontset"] = "cm"
+    matplotlib.rcParams["svg.fonttype"] = "path"
+
+
+def matplotlib_svg(tex: str) -> str:
+    """把一个公式渲染成可内联的 SVG（尺寸换算 em，并按深度对齐基线）。"""
+    import io
+    import re
+
+    import matplotlib.pyplot as plt
+    from matplotlib import mathtext
+    from matplotlib.font_manager import FontProperties
+
+    parser = mathtext.MathTextParser("path")
+    width, height, depth, _glyphs, _rects = parser.parse(
+        "$" + tex + "$", dpi=72, prop=FontProperties(size=_MATH_BASE_PT))
+    fig = plt.figure(figsize=(0.01, 0.01))
+    fig.text(0, 0, "$" + tex + "$", fontsize=_MATH_BASE_PT)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="svg", bbox_inches="tight", pad_inches=0, transparent=True)
+    plt.close(fig)
+    svg = buf.getvalue().decode("utf-8")
+    svg = svg[svg.find("<svg"):]
+    svg = re.sub(r'width="[\d.]+pt"', 'width="%.3fem"' % (width / _MATH_BASE_PT), svg, count=1)
+    svg = re.sub(r'height="[\d.]+pt"', 'height="%.3fem"' % (height / _MATH_BASE_PT), svg, count=1)
+    style = 'style="vertical-align:%.3fem"' % (-depth / _MATH_BASE_PT)
+    return svg.replace("<svg ", "<svg " + style + " ", 1)
+
+
 class MathService:
     """公式渲染服务（缓存 + MathJax + Unicode 降级）。"""
 
     def __init__(self, store: Store, *, assets_dir: Path, backend: str = "auto", node: str | None = None):
         self.store = store
-        self.assets = Path(assets_dir)
+        # 必须是绝对路径：MathJax 子进程用 cwd=assets/mathjax 执行渲染脚本
+        self.assets = Path(assets_dir).resolve()
         self.backend = backend          # auto | mathjax | unicode
         self.node = node or shutil.which("node")
         self._script = self.assets / "mathjax" / "render.js"
@@ -97,8 +187,14 @@ class MathService:
 
     # -- 能力探测 ----------------------------------------------------------
     @property
+    def matplotlib_available(self) -> bool:
+        if self.backend in ("unicode", "mathjax"):
+            return False
+        return _matplotlib_ready()
+
+    @property
     def mathjax_available(self) -> bool:
-        if self.backend == "unicode":
+        if self.backend in ("unicode", "matplotlib"):
             return False
         if not self.node or not self._script.exists():
             return False
@@ -129,15 +225,28 @@ class MathService:
                 missing.append(f)
         if not missing:
             return
+        rendered: dict[str, str] = {}
         if self.mathjax_available:
             rendered = self._render_mathjax(missing)
+        if len(rendered) < len(missing) and self.matplotlib_available:
+            # 安装包里没有 node_modules/mathjax-full，这条才是实际生效的后端
+            try:
+                _matplotlib_setup()
+                for tex in [f for f in missing if f not in rendered]:
+                    try:
+                        rendered[tex] = matplotlib_svg(tex)
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug("matplotlib 无法排版 %r：%s", tex[:40], exc)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("matplotlib 不可用：%s", exc)
+        if rendered:
             for tex, svg in rendered.items():
                 self.store.math_put(_hash(tex), tex, svg)
                 self._stats["rendered"] += 1
-            if len(rendered) == len(missing):
-                return
-            log.warning("MathJax 只渲染出 %d/%d 个公式，其余走 Unicode 降级", len(rendered), len(missing))
-        self._stats["unicode"] += len(missing)
+        left = len(missing) - len(rendered)
+        if left:
+            self._stats["unicode"] += left
+            log.warning("%d/%d 个公式未能排版，走 Unicode 降级", left, len(missing))
 
     def _render_mathjax(self, formulas: list[str]) -> dict[str, str]:
         items = [{"id": str(i), "tex": f, "display": False} for i, f in enumerate(formulas)]

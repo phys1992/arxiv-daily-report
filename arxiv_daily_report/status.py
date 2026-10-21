@@ -128,6 +128,36 @@ def _storage_hint(cfg: Config, store: Store | None = None) -> str:
             f"，缓存 {human(u['raw_bytes'])}")
 
 
+def _math_hint(cfg: Config, store: Store | None = None) -> str:
+    """实际会用哪个公式后端——装完环境第一件想确认的事。"""
+    try:
+        from .mathrender import _matplotlib_ready, _set_mplconfigdir
+
+        conf = cfg.get("report", {}).get("math_backend", "auto")
+        node = __import__("shutil").which("node")
+        script = cfg.assets_dir / "mathjax" / "render.js"
+        modules = cfg.assets_dir / "mathjax" / "node_modules" / "mathjax-full"
+        mj = bool(node) and script.exists() and modules.exists() and conf != "unicode"
+
+        mpl = False
+        if conf != "unicode":
+            _set_mplconfigdir()
+            mpl = _matplotlib_ready()
+
+        if conf == "unicode":
+            return "Unicode 近似（配置强制指定，观感较差）"
+        if conf in ("auto", "mathjax") and mj:
+            return "MathJax（最佳）"
+        if conf == "auto" and mpl:
+            return "matplotlib mathtext（Computer Modern 字形）"
+        if conf == "matplotlib" and mpl:
+            return "matplotlib mathtext（Computer Modern 字形）"
+        return ("Unicode 近似（未装 matplotlib，公式无法排版；"
+                "pip install --user matplotlib 可解决）")
+    except Exception as exc:  # noqa: BLE001
+        return f"无法判断（{exc}）"
+
+
 def _arxiv_hint(cfg: Config, store: Store | None = None) -> str:
     """请求节奏 + 当前是否处于限流冷却期。"""
     try:
@@ -199,6 +229,7 @@ def render_status(cfg: Config, store: Store) -> str:
         f"  配置界面        {_web_hint(cfg)}",
         f"  缓存清理        {_cache_hint(cfg, store)}",
         f"  arXiv 请求      {_arxiv_hint(cfg, store)}",
+        f"  公式排版        {_math_hint(cfg, store)}",
         f"  存储占用        {_storage_hint(cfg, store)}",
         "",
         f"  订阅分类        {s['category_count']} 个：{', '.join(s['categories'])}",
