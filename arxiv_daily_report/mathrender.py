@@ -95,27 +95,67 @@ def _fix_svg(svg: str, tex: str = "") -> str:
     return svg
 
 
-_BARE_TOKEN = re.compile(r"[A-Za-z0-9{}^_+\-*/.=()]+")
+# 裸公式的判据：必须含上下标或 LaTeX 命令；字符集要盖住
+#   ASCII 记号      T^7/Z_2^3、O(G^4)
+#   LaTeX 命令      \phi^{\mu\nu}、\frac{a}{b}
+#   希腊字母        φ^{μν}、G^λ_{μν}（模型常直接写 Unicode 希腊字母）
+#   数学符号        T_nn≥0、a≈b
+_BARE_TOKEN = re.compile(
+    r"[A-Za-z0-9"
+    r"\\{}^_+\-*/.=()\[\]|<>~,;:"
+    r"\u0370-\u03FF"          # 希腊字母
+    r"\u2200-\u22FF"          # ∀∂∃…∑∫≥≤≈≠
+    r"\u00B1\u00D7\u00B7\u2212\u2070-\u209F"  # ± × · − ⁰-₟
+    r"]+"
+)
+_LATEX_CMD = re.compile(r"\\[A-Za-z]{2,}")
+
+
+def _balanced(core: str) -> bool:
+    if core.count("{") != core.count("}"):
+        return False
+    if core.count("[") != core.count("]"):
+        return False
+    if core.count("(") != core.count(")"):
+        return False
+    return True
 
 
 def _wrap_bare_segment(seg: str) -> str:
     """把一段普通文本里裸写的公式补上 $...$。
 
-    模型并不总会照要求加 $...$：日报里见过 $T^7/Z_2^3$，月报里就写成
-    T^7/Z_2^3。没有分隔符时 MATH_RE 找不到它，只能当普通文字输出。
-    这里用「含上下标」作为判据补上分隔符；判据保守，只包裹带 ^ 或 _ 的记号。
+    模型并不总会照要求加 $...$：日报里见过 $T^7/Z_2^3$，别的主题就写成
+    T^7/Z_2^3；论文摘要里还会写成 φ^{μν} 这种「Unicode 希腊字母 + LaTeX 上下标」
+    的混合体。没有分隔符时 MATH_RE 找不到它，只能当普通文字输出。
+
+    判据保守：只包裹「含 ^ / _」或「含 LaTeX 命令」且括号配平的记号。
     """
-    if "^" not in seg and "_" not in seg:
+    if "^" not in seg and "_" not in seg and "\\" not in seg:
         return seg
 
     def repl(m: re.Match) -> str:
         tok = m.group(0)
-        core = tok.rstrip(".,;:!?，。；：、）)】」")
-        tail = tok[len(core):]
-        if not core or ("^" not in core and "_" not in core):
+        core, tail = tok, ""
+        # 先剥句末标点
+        while core and core[-1] in ".,;:!?，。；：、】」":
+            tail, core = core[-1] + tail, core[:-1]
+        # 再剥「多余的」右括号：句子层面的括号不属于公式，
+        # 但 O(G^4) 里的右括号是公式的一部分，要靠配对判断。
+        pairs = {")": "(", "]": "[", "}": "{"}
+        while core and core[-1] in pairs and core.count(core[-1]) > core.count(pairs[core[-1]]):
+            tail, core = core[-1] + tail, core[:-1]
+        if not core or "$" in core:
             return tok
-        if core.endswith(("^", "_")):
+        has_sub_sup = "^" in core or "_" in core
+        has_latex = bool(_LATEX_CMD.search(core))
+        if not (has_sub_sup or has_latex):
+            return tok
+        if "://" in core or core.startswith(("http", "www")):
+            return tok                                   # 网址不是公式
+        if core.endswith(("\\", "^", "_", "{")):
             return tok                                   # 结尾残缺，别硬包
+        if not _balanced(core):
+            return tok                                   # 括号不配平，包了必然排不出来
         return "$" + core + "$" + tail
 
     return _BARE_TOKEN.sub(repl, seg)
@@ -125,8 +165,16 @@ _URL_RE = re.compile(r"(?:https?://|www\.)[^\s，。；、）)】」]+")
 
 
 def normalize_math(text: str) -> str:
-    """给裸公式补上 $ 分隔符；已有 $...$ 的原样保留。"""
-    if not text or ("^" not in text and "_" not in text):
+    """给裸公式补上 $ 分隔符；已有 $...$ 的原样保留。
+
+    $ 不成对时整段不动：那样 MATH_RE 会把两个不相干的 $ 当成一对，
+    造成大段文字被误当成公式。
+    """
+    if not text:
+        return text
+    if text.count("$") % 2:
+        return text
+    if "^" not in text and "_" not in text and "\\" not in text:
         return text
     # 先把网址摘出来，避免把 example.com/a_b_c 当成公式
     urls: list[str] = []

@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -1702,6 +1703,15 @@ class ReviewTest(HermeticTestCase):
         self.assertEqual(verdict, {})
 
 
+def _visible_text(html: str) -> str:
+    """去掉内联 SVG 后的可见 HTML。
+
+    matplotlib 生成的 SVG 里带着 <!-- $AdS_4$ --> 这样的注释，
+    直接 assertNotIn("AdS_4", html) 会被注释命中，判断失真。
+    """
+    return re.sub(r"<svg\b.*?</svg>", "", html, flags=re.S)
+
+
 class DailyMathTest(HermeticTestCase):
     """日报的「今日要点」和「分类速览」曾只做 HTML 转义，公式以源码出现。"""
 
@@ -1741,8 +1751,57 @@ class DailyMathTest(HermeticTestCase):
                 self.assertGreaterEqual(html.count("<svg"), 3)
                 self.assertNotIn("T^7", html.replace("$T^7/Z_2^3$", ""))
                 self.assertIn("class='lead'", html)
+                # 回归：主题综述曾一直是 _p(note)（只转义），T^7/Z_2^3 原样输出
+                self.assertIn("class='theme-note'", html)
+                self.assertNotIn("AdS_4", _visible_text(html),
+                                 "主题综述里的裸公式必须被排掉")
             finally:
                 store.close()
+
+
+class DigestPreserveTest(HermeticTestCase):
+    """--no-llm 跑一遍不能把已存的今日要点/主题综述抹掉（月报依赖它们）。"""
+
+    def test_empty_digest_does_not_overwrite(self):
+        from arxiv_daily_report.models import Paper
+        from arxiv_daily_report.report_daily import build_category_report
+        from arxiv_daily_report.mathrender import MathService
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "c.json", overrides={
+                "subscriptions": [{"category": "gr-qc", "enabled": True,
+                                   "report_name": "", "out_dir": ""}],
+                "paths": {"data": str(tmp / "d"), "cache": str(tmp / "k"),
+                          "reports": str(tmp / "r")}})
+            store = Store(tmp / "d" / "state.sqlite3")
+            try:
+                store.save_day_digest("2026-10-20", "gr-qc",
+                                      highlights="原来的要点",
+                                      themes={"blackhole": "原来的主题综述"})
+                paper = Paper(arxiv_id="2610.1", version=1, title="T",
+                              authors=["A"], abstract="a",
+                              published="2026-10-20T00:00:00Z",
+                              updated="2026-10-20T00:00:00Z",
+                              primary_category="gr-qc", categories=["gr-qc"])
+                math = MathService(store, assets_dir=PROJECT / "assets", backend="unicode")
+                build_category_report(cfg, store, category="gr-qc", day="2026-10-20",
+                                      papers=[paper], math=math, use_llm=False,
+                                      out_dir=tmp / "out")
+                d = store.get_day_digest("2026-10-20", "gr-qc")
+                self.assertEqual(d["highlights"], "原来的要点")
+                self.assertEqual(d["themes"].get("blackhole"), "原来的主题综述")
+            finally:
+                store.close()
+
+    def test_status_times_are_local(self):
+        """库里存 UTC，status 要按配置时区显示。"""
+        from arxiv_daily_report.status import _fmt_time
+
+        self.assertEqual(_fmt_time("2026-10-21T10:37:37Z", "Asia/Shanghai"),
+                         "2026-10-21 18:37")
+        self.assertEqual(_fmt_time("2026-10-21T10:37:37Z", "UTC"), "2026-10-21 10:37")
+        self.assertEqual(_fmt_time("", "Asia/Shanghai"), "")
 
 
 class MonthlyMathTest(HermeticTestCase):
@@ -1964,10 +2023,32 @@ class MathRenderTest(HermeticTestCase):
         self.assertEqual(normalize_math("密度 10^{-3}"), "密度 $10^{-3}$")
         # 已经带分隔符的不重复包裹
         self.assertEqual(normalize_math("$T^7/Z_2^3$"), "$T^7/Z_2^3$")
+        # LaTeX 命令不能被拆坏：$ 绝不能插到 \phi 与 ^{ 之间
+        self.assertEqual(normalize_math(r"对称扰动 \phi^{\mu\nu} 与"), 
+                         "对称扰动 $\\phi^{\\mu\\nu}$ 与")
+        # 混合写法：Unicode 希腊字母 + LaTeX 上下标
+        self.assertEqual(normalize_math("对称扰动 φ^{μν} 与"), "对称扰动 $φ^{μν}$ 与")
+        # 括号属于公式本身，不能被剥掉
+        self.assertEqual(normalize_math("给出 O(G^4) 损失"), "给出 $O(G^4)$ 损失")
+        self.assertEqual(normalize_math("判据 T_nn≥0 成立"), "判据 $T_nn≥0$ 成立")
         # 不该误伤：arXiv 号、网址、残缺记号、普通文字
         for t in ("arXiv:2610.17034", "https://example.com/a_b_c",
                   "残留 M_ 不应包裹", "普通文字没有公式"):
             self.assertEqual(normalize_math(t), t, t)
+        # $ 不成对时整段不动，避免把大段文字误当公式
+        self.assertEqual(normalize_math("价格是 $5 一个，含 T^7"), "价格是 $5 一个，含 T^7")
+
+    def test_no_dollar_inserted_inside_latex_command(self):
+        """回归：旧实现把 \phi^{\mu\nu} 拆成 $\phi^{$\mu\nu}，渲染成 φ^μν}。"""
+        from arxiv_daily_report.mathrender import normalize_math
+
+        for src in (r"\phi^{\mu\nu}", r"G^{\lambda}{}_{\mu\nu}", "φ^{μν}", "G^λ_{μν}"):
+            got = normalize_math(src)
+            self.assertNotIn("$\\", got.replace("$" + src.strip("$") + "$", ""),
+                             f"{src} -> {got}")
+            self.assertTrue(got.count("$") % 2 == 0, got)
+            # 包裹结果必须是一个完整的 $...$
+            self.assertTrue(got in (f"${src}$", src), f"{src} -> {got}")
 
     def test_bare_math_reaches_svg(self):
         """归一化之后，裸公式也要能真的排成 SVG。"""
@@ -1983,7 +2064,7 @@ class MathRenderTest(HermeticTestCase):
                 svc.prepare([text])
                 html = svc.to_html(text)
                 self.assertIn("<svg", html)
-                self.assertNotIn("T^7", html.replace("$T^7/Z_2^3$", ""))
+                self.assertNotIn("T^7", _visible_text(html))
                 self.assertEqual(svc.report_stats()["unicode"], 0)
             finally:
                 store.close()

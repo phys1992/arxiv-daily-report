@@ -477,7 +477,7 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
             )
             note = ctx.theme_notes.get(code)
             if note:
-                parts.append(f"<div class='theme-note'>{_p(note)}</div>")
+                parts.append(f"<div class='theme-note'>{_p(note, math.to_html)}</div>")
 
     # 论文清单
     parts.append(f"<h2>{heading(lang, 'report.papers', ctx.bilingual)}</h2>")

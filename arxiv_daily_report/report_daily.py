@@ -179,13 +179,16 @@ def build_category_report(
         _code = next((t for t in (_p.themes or []) if t in labels), "other")
         theme_counts[_code] += 1
     try:
+        # 没重新生成摘要时（--no-llm 或模型失败），highlights/themes 是空的；
+        # 这时要沿用库里已有的内容，否则一次统计版运行就会把当月月报的依据抹掉。
+        prev = store.get_day_digest(day, category) or {}
         store.save_day_digest(
             day, category,
-            highlights=highlights,
-            themes=theme_notes,
+            highlights=highlights or str(prev.get("highlights") or ""),
+            themes=theme_notes or (prev.get("themes") if isinstance(prev.get("themes"), dict) else {}),
             theme_counts=dict(theme_counts),
             papers=[{"id": p.arxiv_id, "title": p.title} for p in papers],
-            model=model,
+            model=model or str(prev.get("model") or ""),
             count=len(papers),
         )
     except Exception as exc:  # noqa: BLE001

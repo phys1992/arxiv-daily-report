@@ -18,12 +18,29 @@ from .config import Config  # noqa: E402
 from .store import Store  # noqa: E402
 
 
-def setup_logging(verbose: bool) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+def setup_logging(verbose: bool, tz: str | None = None) -> None:
+    """日志时间用配置里的时区，而不是进程的本地时区。
+
+    机器本身可能是 UTC（容器/服务器常见），日志与 status 若显示 UTC，
+    会和报告上写的"北京时间"对不上，排查时容易误判。
+    """
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo(tz or "Asia/Shanghai")
+
+    class _LocalTimeFormatter(logging.Formatter):
+        def formatTime(self, record, datefmt=None):  # noqa: N802
+            import datetime as _dt
+
+            when = _dt.datetime.fromtimestamp(record.created, zone)
+            return when.strftime(datefmt or "%Y-%m-%d %H:%M:%S")
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(_LocalTimeFormatter("%(asctime)s %(levelname)-7s %(message)s",
+                                             "%H:%M:%S"))
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
     # 第三方库过于啰嗦，只在出问题时才需要看
     for noisy in ("weasyprint", "fontTools", "PIL", "urllib3", "cssselect2", "tinycss2"):
         logging.getLogger(noisy).setLevel(logging.WARNING if not verbose else logging.INFO)
@@ -121,7 +138,14 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("--dry-run", action="store_true", help="只显示会清理什么，不真的删")
 
     args = ap.parse_args(argv)
-    setup_logging(args.verbose)
+    # 时区要从配置里读，所以先建 Config 再配日志
+    try:
+        _cfg_early = Config(path=Path(args.config).expanduser()
+                            if getattr(args, "config", None) else None)
+        _tz = _cfg_early["schedule"].get("timezone", "Asia/Shanghai")
+    except Exception:  # noqa: BLE001 - 配置坏了也要能打出日志
+        _tz = "Asia/Shanghai"
+    setup_logging(args.verbose, _tz)
     cfg, store = get_ctx(args)
 
     try:

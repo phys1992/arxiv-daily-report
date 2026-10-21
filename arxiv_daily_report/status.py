@@ -252,6 +252,23 @@ def _web_hint(cfg: Config) -> str:
     return url + tail
 
 
+def _fmt_time(iso: str, tz: str) -> str:
+    """把库里存的 UTC 时间按配置时区显示。"""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    if not iso:
+        return ""
+    text = str(iso).strip()
+    try:
+        when = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=_dt.timezone.utc)
+        return when.astimezone(ZoneInfo(tz)).strftime("%Y-%m-%d %H:%M")
+    except Exception:  # noqa: BLE001
+        return text
+
+
 def render_status(cfg: Config, store: Store) -> str:
     s = status_dict(cfg, store)
     lines = [
@@ -291,5 +308,7 @@ def render_status(cfg: Config, store: Store) -> str:
     lines.append("")
     lines.append("  最近运行：")
     for r in s["runs"][:6]:
-        lines.append(f"    {r['started_at']}  {r['status']:<8} {(r['detail'] or '')[:60]}")
+        tz_name = cfg["schedule"].get("timezone", "Asia/Shanghai")
+        lines.append(f"    {_fmt_time(r['started_at'], tz_name)}  {r['status']:<8} "
+                     f"{(r['detail'] or '')[:60]}")
     return "\n".join(lines)
