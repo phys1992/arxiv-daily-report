@@ -68,6 +68,32 @@ CREATE TABLE IF NOT EXISTS day_digest (
     PRIMARY KEY (day, category)
 );
 
+-- 月报正文的存档：年报要同时参考日报与月报，而月报此前只渲染成 PDF、内容没留
+CREATE TABLE IF NOT EXISTS month_digest (
+    month      TEXT NOT NULL,
+    category   TEXT NOT NULL,
+    overview   TEXT NOT NULL DEFAULT '',
+    highlights TEXT NOT NULL DEFAULT '[]',
+    themes     TEXT NOT NULL DEFAULT '[]',
+    theme_counts TEXT NOT NULL DEFAULT '{}',
+    model      TEXT NOT NULL DEFAULT '',
+    reviewed   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (month, category)
+);
+
+-- 年报正文存档
+CREATE TABLE IF NOT EXISTS annual_digest (
+    year       TEXT NOT NULL,
+    category   TEXT NOT NULL,
+    overview   TEXT NOT NULL DEFAULT '',
+    themes     TEXT NOT NULL DEFAULT '[]',
+    model      TEXT NOT NULL DEFAULT '',
+    reviewed   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (year, category)
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL,
@@ -344,6 +370,62 @@ class Store:
                 out[key] = {} if key != "papers" else []
         if not isinstance(out.get("papers"), list):
             out["papers"] = []
+        return out
+
+    def save_month_digest(self, month: str, category: str, *, overview: str = "",
+                          highlights: list | None = None, themes: list | None = None,
+                          theme_counts: dict | None = None, model: str = "",
+                          reviewed: bool = False) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO month_digest(month,category,overview,highlights,themes,"
+                "theme_counts,model,reviewed,created_at) VALUES(?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(month,category) DO UPDATE SET overview=excluded.overview, "
+                "highlights=excluded.highlights, themes=excluded.themes, "
+                "theme_counts=excluded.theme_counts, model=excluded.model, "
+                "reviewed=excluded.reviewed, created_at=excluded.created_at",
+                (month, category, overview or "",
+                 json.dumps(highlights or [], ensure_ascii=False),
+                 json.dumps(themes or [], ensure_ascii=False),
+                 json.dumps(theme_counts or {}, ensure_ascii=False),
+                 model, 1 if reviewed else 0, _now()),
+            )
+            self.conn.commit()
+
+    def save_annual_digest(self, year: str, category: str, *, overview: str = "",
+                           themes: list | None = None, model: str = "",
+                           reviewed: bool = False) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO annual_digest(year,category,overview,themes,model,reviewed,"
+                "created_at) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(year,category) DO UPDATE SET overview=excluded.overview, "
+                "themes=excluded.themes, model=excluded.model, reviewed=excluded.reviewed, "
+                "created_at=excluded.created_at",
+                (year, category, overview or "",
+                 json.dumps(themes or [], ensure_ascii=False),
+                 model, 1 if reviewed else 0, _now()),
+            )
+            self.conn.commit()
+
+    def month_briefs(self, start_month: str, end_month: str,
+                     categories: list[str] | None = None) -> list[dict[str, Any]]:
+        """[start_month, end_month) 区间内已存档的月报正文。"""
+        sql = ("SELECT * FROM month_digest WHERE month>=? AND month<?")
+        args: list[Any] = [start_month, end_month]
+        if categories:
+            sql += " AND category IN (%s)" % ",".join("?" * len(categories))
+            args.extend(categories)
+        rows = self.conn.execute(sql + " ORDER BY month, category", args).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            for key, default in (("highlights", []), ("themes", []), ("theme_counts", {})):
+                try:
+                    d[key] = json.loads(d.get(key) or "")
+                except Exception:  # noqa: BLE001
+                    d[key] = default
+            out.append(d)
         return out
 
     def month_digests(self, start_day: str, end_day: str, categories: list[str] | None = None) -> list[dict[str, Any]]:

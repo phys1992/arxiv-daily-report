@@ -128,6 +128,19 @@ def _storage_hint(cfg: Config, store: Store | None = None) -> str:
             f"，缓存 {human(u['raw_bytes'])}")
 
 
+def _verify_hint(cfg: Config) -> str:
+    """双模型校验是否启用、用的是哪个模型。"""
+    try:
+        from .review import describe
+
+        desc = describe(cfg)
+        if not desc:
+            return "未启用（在 Web 界面「大模型设置 → 校验模型」里配置）"
+        return f"{desc}（生成 → 校验 → 修订一次）"
+    except Exception as exc:  # noqa: BLE001
+        return f"无法判断（{exc}）"
+
+
 def _math_hint(cfg: Config, store: Store | None = None) -> str:
     """实际会用哪个公式后端——装完环境第一件想确认的事。"""
     try:
@@ -230,6 +243,7 @@ def render_status(cfg: Config, store: Store) -> str:
         f"  缓存清理        {_cache_hint(cfg, store)}",
         f"  arXiv 请求      {_arxiv_hint(cfg, store)}",
         f"  公式排版        {_math_hint(cfg, store)}",
+        f"  校验模型        {_verify_hint(cfg)}",
         f"  存储占用        {_storage_hint(cfg, store)}",
         "",
         f"  订阅分类        {s['category_count']} 个：{', '.join(s['categories'])}",

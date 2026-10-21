@@ -1581,6 +1581,195 @@ class RepoHygieneTest(HermeticTestCase):
             self.assertTrue((PROJECT / rel).is_file(), f"{rel} 缺失")
 
 
+class ReviewTest(HermeticTestCase):
+    """双模型：生成 → 校验 → 修订一次。"""
+
+    def _cfg(self, td, **verify):
+        base = {"enabled": True, "provider": "custom", "model": "verifier-x",
+                "base_url": "http://verify/v1"}
+        base.update(verify)
+        return Config(path=td / "c.json", overrides={
+            "llm": {"provider": "custom", "model": "gen-x", "base_url": "http://gen/v1",
+                    "verify": base},
+            "paths": {"data": str(td / "d"), "cache": str(td / "k"),
+                      "reports": str(td / "r")}})
+
+    def test_disabled_by_default(self):
+        from arxiv_daily_report.review import enabled, verify_client
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Config(path=Path(td) / "c.json")
+            self.assertFalse(enabled(cfg))
+            self.assertIsNone(verify_client(cfg))
+
+    def test_empty_model_means_disabled(self):
+        from arxiv_daily_report.review import enabled, verify_client
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(Path(td), model="")
+            self.assertFalse(enabled(cfg))
+            self.assertIsNone(verify_client(cfg))
+
+    def test_verify_client_uses_configured_model(self):
+        from arxiv_daily_report.review import describe, verify_client
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(Path(td))
+            client = verify_client(cfg)
+            self.assertIsNotNone(client)
+            self.assertEqual(client.model, "verifier-x")
+            self.assertIn("verifier-x", describe(cfg))
+
+    def test_ok_verdict_skips_revision(self):
+        from arxiv_daily_report.review import review_and_revise
+
+        class Fake:
+            def __init__(self, reply): self.reply = reply; self.n = 0
+            def chat_json(self, *a, **k): self.n += 1; return self.reply
+
+        gen = Fake({"should": "never be used"})
+        ver = Fake({"issues": [], "verdict": "ok"})
+        revised, verdict = review_and_revise(
+            gen, ver, draft={"a": 1}, source="材料", subject="日报",
+            checklist="", system="s", output_hint="{}")
+        self.assertIsNone(revised)
+        self.assertEqual(gen.n, 0, "校验通过时不应再调用生成模型")
+        self.assertEqual(verdict.get("verdict"), "ok")
+
+    def test_issues_trigger_one_revision(self):
+        from arxiv_daily_report.review import review_and_revise
+
+        class Fake:
+            def __init__(self, reply): self.reply = reply; self.n = 0; self.last = ""
+            def chat_json(self, system, user, *, schema_hint="", max_tokens=None):
+                self.n += 1
+                self.last = user
+                return self.reply
+
+        gen = Fake({"a": 2})
+        ver = Fake({"issues": [{"where": "论文 1", "problem": "无中生有",
+                                "evidence": "摘要没有这句", "fix": "删掉"}],
+                    "verdict": "revise"})
+        revised, _ = review_and_revise(
+            gen, ver, draft={"a": 1}, source="材料", subject="日报",
+            checklist="", system="s", output_hint="{}")
+        self.assertEqual(revised, {"a": 2})
+        self.assertEqual(gen.n, 1, "只修订一次")
+        self.assertIn("无中生有", gen.last)
+
+    def test_verifier_failure_keeps_draft(self):
+        from arxiv_daily_report.review import review_and_revise
+        from arxiv_daily_report.llm.client import LLMError
+
+        class Boom:
+            def chat_json(self, *a, **k): raise LLMError("网络挂了")
+
+        class Gen:
+            def chat_json(self, *a, **k): raise AssertionError("不该被调用")
+
+        revised, verdict = review_and_revise(
+            Gen(), Boom(), draft={"a": 1}, source="材料", subject="日报",
+            checklist="", system="s", output_hint="{}")
+        self.assertIsNone(revised)
+        self.assertEqual(verdict, {})
+
+
+class AnnualTest(HermeticTestCase):
+    """年报：按子主题、参考日报与月报、按自然年。"""
+
+    def _setup(self, td):
+        cfg = Config(path=td / "c.json", overrides={
+            "schedule": {"timezone": "Asia/Shanghai", "auto_annual": True},
+            "subscriptions": [{"category": "gr-qc", "enabled": True,
+                               "report_name": "", "out_dir": ""}],
+            "paths": {"data": str(td / "d"), "cache": str(td / "k"),
+                      "reports": str(td / "r")}})
+        store = Store(td / "d" / "state.sqlite3")
+        return cfg, store
+
+    def test_collect_year_aggregates_digests(self):
+        from arxiv_daily_report.report_annual import collect_year
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                store.save_day_digest("2026-03-05", "gr-qc", highlights="h1",
+                                      themes={"blackhole": "黑洞进展"},
+                                      theme_counts={"blackhole": 3},
+                                      papers=[{"id": "2603.1", "title": "A"}])
+                store.save_day_digest("2026-07-09", "gr-qc", highlights="h2",
+                                      themes={"cosmology": "宇宙学进展"},
+                                      theme_counts={"cosmology": 2},
+                                      papers=[{"id": "2607.2", "title": "B"}])
+                # 次年数据不应计入
+                store.save_day_digest("2027-01-03", "gr-qc", highlights="h3",
+                                      themes={"blackhole": "次年"}, theme_counts={"blackhole": 9})
+                data = collect_year(cfg, store, "2026")
+                self.assertEqual(data.days, ["2026-03-05", "2026-07-09"])
+                self.assertEqual(data.paper_count, 2)
+                self.assertEqual(data.theme_counts, {"blackhole": 3, "cosmology": 2})
+                self.assertIn("blackhole", data.theme_material)
+                self.assertEqual(data.months, ["2026-03", "2026-07"])
+            finally:
+                store.close()
+
+    def test_collect_year_includes_monthly_briefs(self):
+        from arxiv_daily_report.report_annual import collect_year
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                store.save_day_digest("2026-03-05", "gr-qc", highlights="h",
+                                      themes={"blackhole": "日报里的黑洞"}, theme_counts={})
+                store.save_month_digest("2026-03", "gr-qc", overview="三月概览",
+                                        themes=[{"code": "blackhole", "text": "月报里的黑洞"}])
+                data = collect_year(cfg, store, "2026")
+                joined = "\n".join(data.theme_material["blackhole"])
+                self.assertIn("日报里的黑洞", joined)
+                self.assertIn("月报里的黑洞", joined, "年报必须同时参考月报")
+                self.assertEqual(data.months, ["2026-03"])
+            finally:
+                store.close()
+
+    def test_annual_runs_on_jan_first_for_previous_year(self):
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+
+        from arxiv_daily_report.report_annual import should_run_annual
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                tz = ZoneInfo("Asia/Shanghai")
+                self.assertEqual(should_run_annual(cfg, _dt.datetime(2027, 1, 1, 9, tzinfo=tz)), "2026")
+                self.assertIsNone(should_run_annual(cfg, _dt.datetime(2026, 12, 31, 23, tzinfo=tz)))
+                self.assertIsNone(should_run_annual(cfg, _dt.datetime(2027, 1, 2, 9, tzinfo=tz)))
+                cfg.update({"schedule": {"auto_annual": False}})
+                self.assertIsNone(should_run_annual(cfg, _dt.datetime(2027, 1, 1, 9, tzinfo=tz)))
+            finally:
+                store.close()
+
+    def test_render_annual_is_theme_centred(self):
+        from arxiv_daily_report.report_annual import AnnualData, render_annual_html
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg, store = self._setup(Path(td))
+            try:
+                data = AnnualData(year="2026", scope="gr-qc", days=["2026-03-05"],
+                                  months=["2026-03"], papers=["2603.1"],
+                                  theme_counts={"blackhole": 3})
+                data.overview = "全年概览"
+                data.themes = [{"code": "blackhole", "text": "黑洞方向的年度回顾",
+                                "refs": ["2026-03"], "count": 3}]
+                html = render_annual_html(cfg, data, scope_name="gr-qc")
+                self.assertIn("全年概览", html)
+                self.assertIn("分主题年度回顾", html)
+                self.assertIn("黑洞方向的年度回顾", html)
+                self.assertIn("2026年3月", html)      # 出处渲染成人可读形式
+            finally:
+                store.close()
+
+
 class MathRenderTest(HermeticTestCase):
     """公式排版：安装包里没有 MathJax，必须能靠 matplotlib 排出真正的公式。"""
 

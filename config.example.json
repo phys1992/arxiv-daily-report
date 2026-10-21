@@ -23,7 +23,8 @@
     "catch_up_days": 7,
     "retry": 3,
     "backfill_days": 31,
-    "backfill_max_per_run": 3
+    "backfill_max_per_run": 3,
+    "auto_annual": true
   },
   "paths": {
     "reports": "",
@@ -50,7 +51,13 @@
     "fallback_provider": "",
     "fallback_model": "",
     "save_keys": true,
-    "disable_thinking": true
+    "disable_thinking": true,
+    "verify": {
+      "enabled": false,
+      "provider": "",
+      "model": "",
+      "base_url": ""
+    }
   },
   "fulltext": {
     "enabled": true,

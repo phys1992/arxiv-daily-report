@@ -18,7 +18,7 @@ from .fulltext import FullText, FullTextService
 from .render import (ReportContext, font_css, font_preflight, font_stack,
                      load_theme_taxonomy, render_daily_html)
 from .store import Store
-from .summarize import apply_summary, summarize_day
+from .summarize import apply_summary, review_day, summarize_day
 
 log = logging.getLogger(__name__)
 Progress = Callable[[str], None]

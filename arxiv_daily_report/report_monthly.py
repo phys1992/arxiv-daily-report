@@ -102,6 +102,7 @@ class MonthlyData:
     highlights: list[dict] = field(default_factory=list)      # [{text, days:[YYYY-MM-DD]}]
     theme_notes: list[dict] = field(default_factory=list)     # [{code, text, count, days}]
     model: str = ""
+    reviewed: bool = False                                   # 是否经过校验模型核对
     # 每天可引用的论文：{day: [{"id": "2610.17034", "title": "..."}]}
     # 模型只能从这里挑 arXiv 号，生成后还会再校验一次，防止编造。
     paper_index: dict[str, list[dict]] = field(default_factory=dict)
@@ -446,6 +447,76 @@ def _allowed_ids_text(index: dict[str, list[dict]], month: str, lang: str,
     return "\n".join(lines)
 
 
+def _apply_final(data: MonthlyData, obj: dict, labels: dict, lang: str) -> None:
+    """把模型返回的最终 JSON 落到 data 上（初版与修订版共用，便于统一清洗）。"""
+    data.overview = str(obj.get("overview") or "").strip()
+    data.highlights = []
+    for h in (obj.get("highlights") or []):
+        if not (isinstance(h, dict) and str(h.get("text") or "").strip()):
+            continue
+        days = _valid_days(h.get("days"), data.month)
+        picked, ndrop = pick_highlight_ids(h.get("arxiv"), days, data.paper_index)
+        data.dropped_ids += ndrop
+        text, n = sanitize_citations(str(h["text"]).strip(), data.month, data.paper_index)
+        data.dropped_ids += n
+        data.highlights.append({"text": text, "days": days, "arxiv": picked})
+    data.overview, n = sanitize_citations(data.overview, data.month, data.paper_index)
+    data.dropped_ids += n
+    by_code = {t["code"]: t for t in data.theme_notes}
+    for it in (obj.get("themes") or []):
+        if not isinstance(it, dict):
+            continue
+        code = str(it.get("code") or "")
+        text = " ".join(str(it.get("text") or "").split())
+        if code in by_code and text:
+            fixed, nd = sanitize_citations(text, data.month, data.paper_index)
+            data.dropped_ids += nd
+            by_code[code]["text"] = fixed
+
+
+def _review_monthly(client: LLMClient, cfg: Config, store: Store | None, data: MonthlyData, *,
+                    timeline: str, themes_brief: str, id_list: str,
+                    labels: dict, lang: str, progress: Progress) -> None:
+    """双模型：校验模型对照当日日报挑错，生成模型据此修订一次。"""
+    from .review import review_and_revise, verify_client
+
+    verifier = verify_client(cfg, store)
+    if verifier is None or (not data.overview and not data.highlights):
+        return
+    progress(f"  校验模型 {verifier.describe()} 对照当日日报核对…")
+    draft = {
+        "overview": data.overview,
+        "highlights": data.highlights,
+        "themes": [{"code": t["code"], "text": t["text"], "days": t["days"]}
+                   for t in data.theme_notes],
+    }
+    checklist = (
+        "这是一份月报，它的原始材料只有下列每日日报的要点；它没有读过论文原文。\n"
+        "请核对：\n"
+        "1. 概览与主要进展里出现的每一项工作，是否真的在当天日报的要点里出现过；\n"
+        "2. 标注的日期是否与该工作在日报里出现的日期一致；\n"
+        "3. 附上的 arXiv 号是否属于所标日期、且确实是那项工作（只能来自可引用清单）；\n"
+        "4. 是否把不同日期的工作拼成了一件事，或把相关写成了因果；\n"
+        "5. 是否加入了日报里没有的结论、数值或评价。\n"
+        "月报允许概括与串联，但不允许引入日报之外的信息。"
+    )
+    hint = ('{"overview":"...","highlights":[{"text":"...","days":["10-13"],'
+            '"arxiv":["2610.17034"]}],"themes":[{"code":"...","text":"...","days":["10-13"]}]}')
+    system = SYSTEM_ZH if lang == "zh" else SYSTEM_EN
+    source = (f"月份：{data.month}\n\n各天日报的要点时间线：\n{timeline}\n\n"
+              f"各主题要点：\n{themes_brief}\n\n可引用清单：\n{id_list}")
+    revised, _verdict = review_and_revise(
+        client, verifier, draft=draft, source=source, subject="月度简报",
+        checklist=checklist, system=system, output_hint=hint,
+        max_tokens=3200, progress=progress,
+    )
+    if revised is None:
+        return
+    _apply_final(data, revised, labels, lang)
+    data.reviewed = True
+    progress("  已按校验意见修订月报")
+
+
 def monthly_llm(
     client: LLMClient, data: MonthlyData, *, lang: str, labels: dict, order: list[str],
     progress: Progress, store: Store | None = None, cfg: Config | None = None,
@@ -586,21 +657,19 @@ def monthly_llm(
     try:
         obj = client.chat_json(SYSTEM_ZH if lang == "zh" else SYSTEM_EN, user,
                                schema_hint=schema_final, max_tokens=2600)
-        data.overview = str(obj.get("overview") or "").strip()
-        data.highlights = []
-        for h in (obj.get("highlights") or []):
-            if not (isinstance(h, dict) and str(h.get("text") or "").strip()):
-                continue
-            days = _valid_days(h.get("days"), data.month)
-            picked, ndrop = pick_highlight_ids(h.get("arxiv"), days, data.paper_index)
-            data.dropped_ids += ndrop
-            text, n = sanitize_citations(str(h["text"]).strip(), data.month, data.paper_index)
-            data.dropped_ids += n
-            data.highlights.append({"text": text, "days": days, "arxiv": picked})
-        data.overview, n = sanitize_citations(data.overview, data.month, data.paper_index)
-        data.dropped_ids += n
+        _apply_final(data, obj, labels, lang)
     except LLMError as exc:
         progress(f"  总览生成失败：{exc}")
+        return
+
+    # 双模型：校验模型对照当日日报挑错，生成模型据此修订一次
+    if cfg is not None:
+        try:
+            _review_monthly(client, cfg, store, data, timeline=timeline,
+                            themes_brief=themes_brief, id_list=id_list,
+                            labels=labels, lang=lang, progress=progress)
+        except Exception as exc:  # noqa: BLE001 - 校验失败不该拖垮月报
+            progress(f"  校验与修订失败（沿用初版）：{exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -799,6 +868,15 @@ def run_monthly(
     _, backend = render_pdf(html_text, pdf, base_url=cfg.assets_dir)
     say(f"  月报生成（{backend}）：{pdf}")
     store.record_report(month, scope, str(pdf), data.paper_count, kind="monthly")
+    # 存档月报正文：年报要同时参考日报与月报
+    if data.overview or data.highlights or data.theme_notes:
+        store.save_month_digest(
+            month, scope, overview=data.overview, highlights=data.highlights,
+            themes=[{"code": t["code"], "text": t["text"], "days": t["days"]}
+                    for t in data.theme_notes],
+            theme_counts=dict(data.theme_counts), model=data.model,
+            reviewed=bool(getattr(data, "reviewed", False)),
+        )
     return [pdf]
 
 

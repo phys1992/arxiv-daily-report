@@ -82,6 +82,8 @@ class DaySummary:
     prompt_version: str = PROMPT_VERSION
     ok: bool = False
     error: str = ""
+    reviewed: bool = False          # 是否经过校验模型的核对与修订
+    verifier: str = ""              # 校验模型描述
 
 
 def build_user_prompt(papers: list[Paper], category: str, day: str, taxonomy: list[dict],
@@ -199,6 +201,93 @@ def summarize_day(
         log.warning("有 %d 篇论文没有拿到摘要（将保留元数据条目）", len(missing))
     res.ok = bool(res.papers) or bool(res.highlights)
     return res
+
+
+def source_material(papers: list[Paper], fulltexts: dict | None,
+                    fulltext_chars: int = 4000) -> str:
+    """把校验模型要对照的原始材料整理成文本（标题/摘要/结论原文）。"""
+    out: list[str] = []
+    for i, p in enumerate(papers, 1):
+        parts = [f"[{i}] arXiv:{p.arxiv_id}  {p.title}",
+                 f"    分类：{p.primary_category}",
+                 f"    摘要：{p.abstract[:2200]}"]
+        ft = (fulltexts or {}).get(p.uid)
+        if ft is not None and getattr(ft, "has_fulltext", False):
+            body = ft.conclusion_text(fulltext_chars)
+            if body:
+                parts.append(f"    结论/讨论原文：{body}")
+        out.append("\n".join(parts))
+    return "\n\n".join(out)
+
+
+def review_day(
+    generator: LLMClient,
+    verifier: LLMClient,
+    papers: list[Paper],
+    res: "DaySummary",
+    *,
+    taxonomy: list[dict],
+    category: str,
+    day: str,
+    lang: str = "zh",
+    fulltexts: dict | None = None,
+    fulltext_chars: int = 4000,
+    progress=None,
+) -> None:
+    """让校验模型对照原始材料挑错，生成模型据意见修订一次（就地更新 res）。"""
+    from .review import review_and_revise
+
+    valid_codes = {t["code"] for t in taxonomy}
+    draft = {
+        "highlights": res.highlights,
+        "themes": res.theme_notes,
+        "papers": [
+            {"id": uid, "summary": v.get("summary", ""), "themes": v.get("themes", [])}
+            for uid, v in res.papers.items()
+        ],
+    }
+    checklist = (
+        "逐条核对每篇论文的一句话要点：\n"
+        "1. 要点里出现的结论、数值、符号、适用范围，是否与该论文的摘要/结论原文一致；\n"
+        "2. 是否把摘要里的\"计划/可能\"写成了已证实的结论；\n"
+        "3. 是否遗漏了关键成立条件（例如只在某类时空、某个近似下成立）；\n"
+        "4. 主题综述里的 [n] 引用，编号对应的论文是否真的在讲这件事；\n"
+        "5. 今日要点是否引入了论文列表里没有的内容。\n"
+        "注意：摘要本身没有给出的信息，结论原文里有就可以用；两者都没有就算无中生有。"
+    )
+    system = SYSTEM_ZH if lang == "zh" else SYSTEM_EN
+    hint = ('{"highlights":"...","themes":{"主题代码":"..."},'
+            '"papers":[{"id":"原样 id","summary":"...","themes":["代码"]}]}')
+
+    revised, verdict = review_and_revise(
+        generator, verifier, draft=draft,
+        source=source_material(papers, fulltexts, fulltext_chars),
+        subject="日报要点", checklist=checklist, system=system,
+        output_hint=hint,
+        max_tokens=max(2048, len(papers) * 260 + 1500),
+        progress=progress,
+    )
+    if revised is None:
+        return
+
+    by_uid = {p.uid: p for p in papers}
+    if str(revised.get("highlights") or "").strip():
+        res.highlights = str(revised["highlights"]).strip()
+    for code, note in (revised.get("themes") or {}).items():
+        if code in valid_codes and str(note).strip():
+            res.theme_notes[code] = str(note).strip()
+    for item in revised.get("papers") or []:
+        if not isinstance(item, dict):
+            continue
+        uid = str(item.get("id") or "").strip()
+        if uid not in by_uid:
+            continue
+        themes = [t for t in (item.get("themes") or []) if t in valid_codes][:2]
+        summary = str(item.get("summary") or "").strip()
+        if summary:
+            res.papers[uid] = {"summary": summary, "themes": themes or ["other"]}
+    if verdict.get("issues"):
+        res.reviewed = True
 
 
 def summarize_day_bilingual(

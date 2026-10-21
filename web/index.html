@@ -94,6 +94,38 @@
           </div>
         </div>
 
+        <!-- 双模型：一个生成、另一个校验 -->
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="llm.verify_title"></h2>
+            <p class="muted" data-i18n="llm.verify_desc"></p>
+          </div>
+          <div class="card-body grid grid-2">
+            <label class="field field-check">
+              <input type="checkbox" data-path="llm.verify.enabled">
+              <span>
+                <span class="label" data-i18n="llm.verify_enabled"></span>
+                <small class="hint" data-i18n="llm.verify_enabled_hint"></small>
+              </span>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.verify.provider"></span>
+              <select id="verify-provider" data-path="llm.verify.provider"></select>
+              <small class="hint" data-i18n="llm.verify_provider_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.verify.model"></span>
+              <input type="text" data-path="llm.verify.model" spellcheck="false" autocomplete="off">
+              <small class="hint" data-i18n="llm.verify_model_hint"></small>
+            </label>
+            <label class="field">
+              <span class="label" data-i18n="llm.verify.base_url"></span>
+              <input type="text" data-path="llm.verify.base_url" spellcheck="false" autocomplete="off">
+              <small class="hint" data-i18n="llm.verify_base_url_hint"></small>
+            </label>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-head">
             <h2 data-i18n="llm.params"></h2>

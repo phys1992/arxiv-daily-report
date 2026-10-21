@@ -37,15 +37,21 @@ class Usage:
 
 
 class LLMClient:
-    def __init__(self, cfg: Config, store: Store | None = None, provider_key: str | None = None):
+    def __init__(self, cfg: Config, store: Store | None = None, provider_key: str | None = None,
+                 *, model: str | None = None, base_url: str | None = None,
+                 role: str = ""):
         self.cfg = cfg
         self.store = store
         llm = cfg["llm"]
+        self.role = role                 # "生成" / "校验"，仅用于日志
         self.provider: Provider = get_provider(provider_key or llm.get("provider", "deepseek"))
         self.base_url = (llm.get("base_url") or "").strip() or self.provider.base_url
         if provider_key and provider_key != llm.get("provider"):
             self.base_url = self.provider.base_url
-        self.model = (llm.get("model") or "").strip() or self.provider.default_model
+        if base_url:
+            self.base_url = base_url.strip()
+        self.model = ((model if model is not None else llm.get("model")) or "").strip() \
+            or self.provider.default_model
         self.temperature = float(llm.get("temperature", 0) or 0)
         self.max_tokens = int(llm.get("max_tokens", 4096) or 4096)
         self.timeout = int(llm.get("timeout_sec", 180) or 180)

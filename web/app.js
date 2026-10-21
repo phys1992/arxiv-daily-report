@@ -327,6 +327,22 @@
     if (want && !state.providerMap[want]) {
       sel.appendChild(el('option', { value: want, text: want }));
     }
+
+    // 校验模型的厂商：空 = 与生成模型相同
+    var vs = $('#verify-provider');
+    if (vs) {
+      vs.textContent = '';
+      vs.appendChild(el('option', { value: '', text: t('llm.verify_same') }));
+      state.providers.forEach(function (p) {
+        vs.appendChild(el('option', { value: p.key, text: p.label + ' (' + p.key + ')' }));
+      });
+      var vwant = (state.config && state.config.llm && state.config.llm.verify)
+        ? (state.config.llm.verify.provider || '') : '';
+      if (vwant && !state.providerMap[vwant]) {
+        vs.appendChild(el('option', { value: vwant, text: vwant }));
+      }
+      vs.value = vwant;
+    }
   }
 
   function currentProvider() {

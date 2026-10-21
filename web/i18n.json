@@ -221,7 +221,18 @@
     "cache.opt.1y": "每年",
     "llm.model_pick": "可用模型（{n} 个）— 选一个填入上方",
     "schedule.timezone_custom": "当前自定义时区",
-    "schedule.timezone_hint": "报告日按这个时区的自然日切分。列表里没有的话，可直接编辑 config.json 填任意 IANA 时区名。"
+    "schedule.timezone_hint": "报告日按这个时区的自然日切分。列表里没有的话，可直接编辑 config.json 填任意 IANA 时区名。",
+    "llm.verify_title": "校验模型（可选）",
+    "llm.verify_desc": "填了校验模型后，生成模型先出初版，校验模型对照原始材料挑错，再由生成模型修订一次。",
+    "llm.verify_enabled": "启用校验与修订",
+    "llm.verify_enabled_hint": "日报对照论文全文、月报对照当日日报、年报对照日报与月报。",
+    "llm.verify.provider": "校验模型厂商",
+    "llm.verify_provider_hint": "留空则与生成模型同一厂商。",
+    "llm.verify.model": "校验模型名",
+    "llm.verify_model_hint": "留空则不启用校验。建议选与生成模型不同家族的模型，交叉检查更有效。",
+    "llm.verify.base_url": "校验模型地址",
+    "llm.verify_base_url_hint": "留空则用该厂商默认地址。",
+    "llm.verify_same": "与生成模型相同"
   },
   "en": {
     "app.title": "arXiv Daily Report Settings",
@@ -445,6 +456,17 @@
     "cache.opt.1y": "Yearly",
     "llm.model_pick": "Available models ({n}) — pick one to fill the field above",
     "schedule.timezone_custom": "current custom timezone",
-    "schedule.timezone_hint": "Report days are cut on this timezone's calendar day. For unlisted zones, set any IANA name in config.json."
+    "schedule.timezone_hint": "Report days are cut on this timezone's calendar day. For unlisted zones, set any IANA name in config.json.",
+    "llm.verify_title": "Verifier model (optional)",
+    "llm.verify_desc": "With a verifier configured, the generator writes a draft, the verifier checks it against the source material, and the generator applies one revision pass.",
+    "llm.verify_enabled": "Enable verification and revision",
+    "llm.verify_enabled_hint": "Daily drafts are checked against full text, monthly against daily digests, annual against both.",
+    "llm.verify.provider": "Verifier provider",
+    "llm.verify_provider_hint": "Leave empty to use the generator's provider.",
+    "llm.verify.model": "Verifier model",
+    "llm.verify_model_hint": "Leave empty to disable. A model from a different family catches more.",
+    "llm.verify.base_url": "Verifier base URL",
+    "llm.verify_base_url_hint": "Leave empty to use the provider default.",
+    "llm.verify_same": "Same as generator"
   }
 }

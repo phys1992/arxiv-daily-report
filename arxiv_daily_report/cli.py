@@ -105,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--month", help="YYYY-MM（默认：上一个自然月）")
     p.add_argument("--no-llm", action="store_true", help="只出统计版简报")
 
+    p = sub.add_parser("annual", help="生成年报 PDF（按子主题，参考日报与月报）")
+    p.add_argument("--year", help="YYYY（默认：上一个自然年）")
+    p.add_argument("--no-llm", action="store_true", help="只出统计版报告")
+
     p = sub.add_parser("serve", help="启动 Web 配置界面")
     p.add_argument("--host")
     p.add_argument("--port", type=int)
@@ -189,6 +193,14 @@ def _dispatch(args, cfg, store, ap) -> int:
         from arxiv_daily_report.report_monthly import run_monthly
 
         paths = run_monthly(cfg, store, month=args.month, use_llm=not args.no_llm)
+        for p in paths:
+            print(f"  生成：{p}")
+        return 0
+
+    if args.cmd == "annual":
+        from arxiv_daily_report.report_annual import run_annual
+
+        paths = run_annual(cfg, store, year=args.year, use_llm=not args.no_llm)
         for p in paths:
             print(f"  生成：{p}")
         return 0

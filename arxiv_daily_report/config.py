@@ -217,6 +217,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "timezone": "Asia/Shanghai",
         "report_day_offset": 1,        # 报告日 = 运行日 - N 天
         "auto_monthly": True,          # 每月 1 号自动生成上一个自然月的简报
+        "auto_annual": True,           # 每年 1 月 1 日自动生成上一年年度报告
         "catch_up_days": 7,            # 每次回溯天数（周末/节假日补录）
         # 运行前扫一遍最近这些天，把「有论文但还没生成报告」的日期补上。
         # 首次运行会一次补齐当月；之后每次按下面的上限补。0 = 关闭补缺。
@@ -255,6 +256,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "disable_thinking": True,      # DeepSeek 等厂商：结构化摘要关闭思考模式
         "fallback_provider": "",       # 主模型失败时降级；空则不降级
         "fallback_model": "",
+        # 双模型：一个生成、另一个校验。校验模型对照原始材料挑错，
+        # 生成模型据此修订一次。verify.model 留空则不启用。
+        "verify": {
+            "enabled": False,
+            "provider": "",            # 空 = 与生成模型同一个厂商
+            "model": "",               # 空 = 不启用校验
+            "base_url": "",
+        },
         "save_keys": True,             # False = 只从环境变量读取密钥
     },
     # ---- 报告内容 ----

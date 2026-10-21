@@ -65,6 +65,13 @@ def run_once(cfg: Config, store: Store, *, day: str | None = None) -> None:
             log.info("今天是月初，生成 %s 月报", month)
             run_monthly(cfg, store, month=month)
 
+        from .report_annual import run_annual, should_run_annual
+
+        year = should_run_annual(cfg)
+        if year:
+            log.info("今天是元旦，生成 %s 年报", year)
+            run_annual(cfg, store, year=year)
+
 
 def run_daemon(cfg: Config, store: Store, *, with_web: bool = True) -> None:
     """常驻循环。启动时先补跑一次（幂等），之后按配置时刻触发。
