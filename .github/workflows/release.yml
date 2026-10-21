@@ -1,6 +1,6 @@
 name: release
 
-# 打 tag（v0.1.0 之类）自动构建 Debian / Fedora / Arch 三种安装包并发布到 Release。
+# 打 tag（v0.2.0 之类）自动构建 Debian / Fedora / Arch 三种安装包并发布到 Release。
 # 也可以手动触发，指定版本号（不会创建 tag，只产出工件）。
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（例如 0.1.0）。留空则用 pyproject.toml 里的版本'
+        description: '版本号（例如 0.2.0）。留空则用 pyproject.toml 里的版本'
         required: false
         default: ''
 
@@ -73,32 +73,56 @@ jobs:
           path: out/*
           retention-days: 90
 
+      # 把 CHANGELOG 里对应版本的章节抽出来，拼进 Release 说明
+      - name: Compose release body
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          python3 - "$V" > release-body.md <<'PYEOF'
+          import re
+          import sys
+          from pathlib import Path
+
+          ver = sys.argv[1]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8") if Path("CHANGELOG.md").exists() else ""
+          m = re.search(rf"^##\s*{re.escape(ver)}\b.*?$(.*?)(?=^##\s|\Z)", text, re.S | re.M)
+          section = (m.group(1).strip() if m else "")
+
+          print("## 安装")
+          print()
+          print("| 发行版 | 包 |")
+          print("|---|---|")
+          print(f"| Debian / Ubuntu | `sudo apt install ./arxiv-daily-report_{ver}-1_amd64.deb` |")
+          print(f"| Fedora / RHEL | `sudo dnf install ./arxiv-daily-report-{ver}-1.x86_64.rpm` |")
+          print(f"| Arch / Manjaro | `sudo pacman -U ./arxiv-daily-report-{ver}-1-x86_64.pkg.tar.zst` |")
+          print()
+          print("安装后（**推荐用用户级服务，不需要 root，也不会有权限问题**）：")
+          print()
+          print("```bash")
+          print("arxiv-daily-report serve            # 打开 Web 配置界面填模型密钥")
+          print("systemctl --user enable --now arxiv-daily-report   # 开机自启、常驻生成")
+          print("```")
+          print()
+          print("在 Debian / Fedora 上还需自行安装 PDF 渲染依赖（Arch 已作为包依赖自动装上）：")
+          print()
+          print("```bash")
+          print("pip install --user weasyprint matplotlib")
+          print("```")
+          if section:
+              print()
+              print("---")
+              print()
+              print(f"## 本版变更（{ver}）")
+              print()
+              print(section)
+          PYEOF
+          cat release-body.md
+
       - name: Publish to GitHub Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: out/*
           generate_release_notes: true
-          body: |
-            ## 安装
-
-            | 发行版 | 包 |
-            |---|---|
-            | Debian / Ubuntu | `sudo apt install ./arxiv-daily-report_${{ steps.ver.outputs.version }}-1_amd64.deb` |
-            | Fedora / RHEL | `sudo dnf install ./arxiv-daily-report-${{ steps.ver.outputs.version }}-1.x86_64.rpm` |
-            | Arch / Manjaro | `sudo pacman -U ./arxiv-daily-report-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst` |
-
-            安装后（**推荐用用户级服务，不需要 root，也不会有权限问题**）：
-
-            ```bash
-            arxiv-daily-report serve            # 打开 Web 配置界面填模型密钥
-            systemctl --user enable --now arxiv-daily-report   # 开机自启、常驻生成
-            ```
-
-            在 Debian / Fedora 上还需自行安装 PDF 渲染依赖（Arch 已作为包依赖自动装上）：
-
-            ```bash
-            pip install --user weasyprint       # 或 pipx install weasyprint
-            ```
-
-            详见 README 的安装与依赖说明。
+          body_path: release-body.md
