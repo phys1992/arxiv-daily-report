@@ -1,6 +1,6 @@
 name: release
 
-# 打 tag（v0.2.2 之类）自动构建 Debian / Fedora / Arch 三种安装包并发布到 Release。
+# 打 tag（v0.2.1 之类）自动构建 Debian / Fedora / Arch 三种安装包并发布到 Release。
 # 也可以手动触发，指定版本号（不会创建 tag，只产出工件）。
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（例如 0.2.2）。留空则用 pyproject.toml 里的版本'
+        description: '版本号（例如 0.2.1）。留空则用 pyproject.toml 里的版本'
         required: false
         default: ''
 

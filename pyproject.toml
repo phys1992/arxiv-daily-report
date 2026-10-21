@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arxiv-daily-report"
-version = "0.2.2"
+version = "0.2.1"
 description = "arXiv 论文日报：按分类抓取新增论文、生成 PDF 报告与月度综述"
 readme = "README.md"
 requires-python = ">=3.11"
