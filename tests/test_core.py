@@ -1759,6 +1759,64 @@ class DailyMathTest(HermeticTestCase):
                 store.close()
 
 
+class SchedulerTimezoneTest(HermeticTestCase):
+    """触发时刻与目标日报日只跟配置时区有关，与进程本地时区无关。"""
+
+    def _cfg(self, td):
+        return Config(path=td / "c.json", overrides={
+            "schedule": {"timezone": "Asia/Shanghai", "time": "19:00", "mode": "daily",
+                         "auto_monthly": True, "auto_annual": True},
+            "paths": {"data": str(td / "d"), "cache": str(td / "k"),
+                      "reports": str(td / "r")}})
+
+    def test_next_fire_uses_configured_timezone(self):
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+
+        from arxiv_daily_report.scheduler import next_fire
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(Path(td))
+            bj = ZoneInfo("Asia/Shanghai")
+            instant = _dt.datetime(2026, 10, 21, 18, 30, tzinfo=bj)   # 北京 18:30
+            for zone in ("Asia/Shanghai", "UTC", "America/New_York", "Pacific/Auckland"):
+                got = next_fire(cfg, instant.astimezone(ZoneInfo(zone)))
+                self.assertEqual(got.astimezone(bj).strftime("%Y-%m-%d %H:%M"),
+                                 "2026-10-21 19:00", zone)
+
+    def test_target_day_is_timezone_stable(self):
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+
+        from arxiv_daily_report.collect import target_day
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(Path(td))
+            bj = ZoneInfo("Asia/Shanghai")
+            instant = _dt.datetime(2026, 10, 21, 18, 30, tzinfo=bj)
+            for zone in ("Asia/Shanghai", "UTC", "America/New_York"):
+                self.assertEqual(target_day(cfg, instant.astimezone(ZoneInfo(zone))),
+                                 "2026-10-20", zone)
+
+    def test_monthly_and_annual_fire_at_beijing_midnight(self):
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+
+        from arxiv_daily_report.report_annual import should_run_annual
+        from arxiv_daily_report.report_monthly import should_run_monthly
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(Path(td))
+            bj = ZoneInfo("Asia/Shanghai")
+            # 北京 11-01 00:30 时 UTC 还是 10-31，月报仍应触发
+            self.assertEqual(should_run_monthly(cfg, _dt.datetime(2026, 11, 1, 0, 30, tzinfo=bj)),
+                             "2026-10")
+            self.assertIsNone(should_run_monthly(cfg, _dt.datetime(2026, 10, 31, 23, 30, tzinfo=bj)))
+            self.assertEqual(should_run_annual(cfg, _dt.datetime(2027, 1, 1, 0, 30, tzinfo=bj)),
+                             "2026")
+            self.assertIsNone(should_run_annual(cfg, _dt.datetime(2026, 12, 31, 23, 30, tzinfo=bj)))
+
+
 class DigestPreserveTest(HermeticTestCase):
     """--no-llm 跑一遍不能把已存的今日要点/主题综述抹掉（月报依赖它们）。"""
 

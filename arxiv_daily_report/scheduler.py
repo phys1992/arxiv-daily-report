@@ -40,7 +40,10 @@ def _parse_hhmm(s: str) -> tuple[int, int]:
 def next_fire(cfg: Config, now: dt.datetime | None = None) -> dt.datetime:
     sched = cfg["schedule"]
     tz = ZoneInfo(sched.get("timezone", "Asia/Shanghai"))
-    now = now or dt.datetime.now(tz)
+    # 传进来的 now 可能带着别的时区（测试、或将来别的调用方），
+    # 必须先换算；否则 now.replace(hour=19) 会落成"那个时区的 19:00"，
+    # 在北京时间下会差 8 小时。
+    now = (now or dt.datetime.now(tz)).astimezone(tz)
     if sched.get("mode") == "interval":
         minutes = max(5, int(sched.get("interval_minutes", 1440)))
         return now + dt.timedelta(minutes=minutes)
