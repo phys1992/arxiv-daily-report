@@ -450,6 +450,9 @@ document.getElementById('f').addEventListener('submit',function(e){{
             for provider, key in keys.items():
                 if key and not key.startswith("••"):
                     cfg.set_api_key(provider, key)
+            vkey = body.get("verify_api_key")
+            if vkey is not None and not str(vkey).startswith("••"):
+                cfg.set_verify_api_key(str(vkey).strip())
             cfg.save()
             self._json({"ok": True, "config": self._config_payload()})
             return
@@ -501,6 +504,8 @@ document.getElementById('f').addEventListener('submit',function(e){{
         data["llm"]["api_key_masked"] = {
             p: cfg.mask_key(p) for p in ("deepseek", "moonshot", "openai", "anthropic", "custom")
         }
+        data["llm"]["verify"]["api_key_masked"] = cfg.mask_verify_key()
+        data["llm"]["verify"]["api_key_source"] = cfg.verify_key_source()
         data["llm"]["api_key_source"] = {
             p: cfg.key_source(p) for p in ("deepseek", "moonshot", "openai", "anthropic", "custom")
         }

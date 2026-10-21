@@ -546,6 +546,39 @@ class Config:
             return os.environ["OPENAI_API_KEY"].strip()
         return (self._secrets.get("api_keys", {}) or {}).get(provider, "") or ""
 
+    # -- 校验模型的独立密钥 ------------------------------------------------
+    # 校验模型可能与生成模型用同一个厂商、却是另一个账号，
+    # 所以单独存一份，不和 api_keys 挤在一起。
+    def verify_api_key(self) -> str:
+        env = self._ENV_KEYS.get(str((self._data.get("llm", {}).get("verify") or {})
+                                    .get("provider") or ""))
+        if env and os.environ.get(env):
+            return os.environ[env].strip()
+        return str(self._secrets.get("verify_api_key") or "")
+
+    def set_verify_api_key(self, key: str) -> None:
+        if key:
+            self._secrets["verify_api_key"] = key
+        else:
+            self._secrets.pop("verify_api_key", None)
+
+    def mask_verify_key(self) -> str:
+        k = self.verify_api_key()
+        if not k:
+            return ""
+        if len(k) <= 10:
+            return "•" * len(k)
+        return f"{k[:6]}{'•' * 8}{k[-4:]}"
+
+    def verify_key_source(self) -> str:
+        if self._secrets.get("verify_api_key"):
+            return "file"
+        verify = self._data.get("llm", {}).get("verify") or {}
+        env = self._ENV_KEYS.get(str(verify.get("provider") or ""))
+        if env and os.environ.get(env):
+            return "env:" + env
+        return ""
+
     def set_api_key(self, provider: str, key: str) -> None:
         keys = self._secrets.setdefault("api_keys", {})
         if key:

@@ -64,7 +64,9 @@ def verify_client(cfg: Config, store: Store | None = None) -> LLMClient | None:
     base_url = str(conf.get("base_url") or "").strip() or None
     client = LLMClient(cfg, store, provider_key=provider,
                        model=str(conf.get("model") or "").strip(),
-                       base_url=base_url, role="校验")
+                       base_url=base_url,
+                       api_key=cfg.verify_api_key() or None,
+                       role="校验")
     if not client.ready:
         log.warning("校验模型 %s 没有可用的密钥，本次不做校验", client.describe())
         return None

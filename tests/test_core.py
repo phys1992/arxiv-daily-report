@@ -1620,6 +1620,34 @@ class ReviewTest(HermeticTestCase):
             self.assertEqual(client.model, "verifier-x")
             self.assertIn("verifier-x", describe(cfg))
 
+    def test_independent_verifier_api_key(self):
+        """校验模型要有自己的密钥槽：可以与生成模型不同账号。"""
+        from arxiv_daily_report.review import verify_client
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(Path(td))
+            cfg.set_api_key("custom", "sk-gen-AAA")
+            self.assertEqual(cfg.api_key("custom"), "sk-gen-AAA")
+            self.assertEqual(cfg.verify_api_key(), "", "未设置时不应顺手用生成模型的")
+            # 未设独立密钥时回落到厂商密钥，保证同厂商场景开箱可用
+            client = verify_client(cfg, None)
+            self.assertEqual(client.api_key, "sk-gen-AAA")
+
+            cfg.set_verify_api_key("sk-ver-BBBBBBBBBBBB")
+            self.assertEqual(cfg.verify_api_key(), "sk-ver-BBBBBBBBBBBB")
+            self.assertIn("sk-ver", cfg.mask_verify_key())
+            self.assertNotIn("BBBBBBBBBBBB", cfg.mask_verify_key(), "掩码不能泄漏密钥")
+            client = verify_client(cfg, None)
+            self.assertEqual(client.api_key, "sk-ver-BBBBBBBBBBBB")
+
+            # 落盘后仍能取回
+            cfg.save()
+            again = Config(path=cfg.path)
+            self.assertEqual(again.verify_api_key(), "sk-ver-BBBBBBBBBBBB")
+
+            cfg.set_verify_api_key("")
+            self.assertEqual(cfg.verify_api_key(), "")
+
     def test_ok_verdict_skips_revision(self):
         from arxiv_daily_report.review import review_and_revise
 

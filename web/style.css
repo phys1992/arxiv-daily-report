@@ -176,6 +176,7 @@ code, pre { font-family: var(--mono); font-size: 12.5px; }
 .card-body + .card-body { border-top: 1px dashed var(--line); }
 .card-body.grid { display: grid; gap: 14px 18px; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.span-2 { grid-column: 1 / -1; }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 /* ---------------------------------------------------------------- 表单 */

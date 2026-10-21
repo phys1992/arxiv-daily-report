@@ -39,7 +39,7 @@ class Usage:
 class LLMClient:
     def __init__(self, cfg: Config, store: Store | None = None, provider_key: str | None = None,
                  *, model: str | None = None, base_url: str | None = None,
-                 role: str = ""):
+                 api_key: str | None = None, role: str = ""):
         self.cfg = cfg
         self.store = store
         llm = cfg["llm"]
@@ -55,7 +55,7 @@ class LLMClient:
         self.temperature = float(llm.get("temperature", 0) or 0)
         self.max_tokens = int(llm.get("max_tokens", 4096) or 4096)
         self.timeout = int(llm.get("timeout_sec", 180) or 180)
-        self.api_key = cfg.api_key(self.provider.key)
+        self.api_key = (api_key or "").strip() or cfg.api_key(self.provider.key)
         self.last_usage = Usage()
         self.calls = 0
         self.last_finish_reason = ""

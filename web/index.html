@@ -101,7 +101,7 @@
             <p class="muted" data-i18n="llm.verify_desc"></p>
           </div>
           <div class="card-body grid grid-2">
-            <label class="field field-check">
+            <label class="field field-check span-2">
               <input type="checkbox" data-path="llm.verify.enabled">
               <span>
                 <span class="label" data-i18n="llm.verify_enabled"></span>
@@ -114,14 +114,26 @@
               <small class="hint" data-i18n="llm.verify_provider_hint"></small>
             </label>
             <label class="field">
+              <span class="label" data-i18n="llm.verify.base_url"></span>
+              <input type="text" id="verify-base-url" data-path="llm.verify.base_url"
+                     spellcheck="false" autocomplete="off">
+              <small class="hint" data-i18n="llm.verify_base_url_hint"></small>
+            </label>
+            <label class="field">
               <span class="label" data-i18n="llm.verify.model"></span>
-              <input type="text" data-path="llm.verify.model" spellcheck="false" autocomplete="off">
+              <span class="input-row">
+                <input type="text" id="verify-model" data-path="llm.verify.model"
+                       spellcheck="false" autocomplete="off">
+                <button class="btn btn-ghost" id="btn-verify-models"
+                        data-i18n="action.getModels"></button>
+              </span>
+              <select id="verify-model-pick" hidden></select>
               <small class="hint" data-i18n="llm.verify_model_hint"></small>
             </label>
             <label class="field">
-              <span class="label" data-i18n="llm.verify.base_url"></span>
-              <input type="text" data-path="llm.verify.base_url" spellcheck="false" autocomplete="off">
-              <small class="hint" data-i18n="llm.verify_base_url_hint"></small>
+              <span class="label" data-i18n="llm.verify.api_key"></span>
+              <input type="password" id="verify-key" spellcheck="false" autocomplete="new-password">
+              <small class="hint" id="verify-key-hint"></small>
             </label>
           </div>
         </div>

@@ -361,9 +361,71 @@
     var modelInput = $('#llm-model');
     modelInput.placeholder = (p && p.default_model) ? p.default_model : '';
     syncApiKeyField();
+    syncVerifyKeyField();
   }
 
   /** API Key 输入框：只显示掩码占位符，绝不回填明文 */
+  /** 校验模型的密钥回显：它与生成模型各自独立，单独一份掩码 */
+  function syncVerifyKeyField() {
+    var input = $('#verify-key');
+    var hint = $('#verify-key-hint');
+    if (!input) return;
+    var v = (state.config && state.config.llm && state.config.llm.verify) || {};
+    var mask = v.api_key_masked || '';
+    var src = v.api_key_source || '';
+    input.placeholder = mask || t('llm.api_key_placeholder');
+    input.value = state.verifyKeyTyped || '';
+    var text;
+    if (src.indexOf('env:') === 0) text = t('llm.api_key_source_env', { src: src.slice(4) });
+    else if (src) text = t('llm.api_key_source_file', { mask: mask });
+    else text = t('llm.verify_key_fallback');
+    hint.textContent = text + ' · ' + t('llm.api_key_keep');
+  }
+
+  /** 拉取校验模型的可选模型列表（用它自己的厂商/地址/密钥） */
+  function fetchVerifyModels() {
+    var btn = $('#btn-verify-models');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    var v = state.config.llm.verify || {};
+    var body = {
+      provider: $('#verify-provider').value || v.provider || state.config.llm.provider,
+      base_url: $('#verify-base-url').value || '',
+      model: $('#verify-model').value || ''
+    };
+    // 用户刚输入的密钥优先；没输入就让服务端用已保存的
+    if (state.verifyKeyTyped) body.api_key = state.verifyKeyTyped;
+    api.post('/api/test-connection', body).then(function (res) {
+      res = res || {};
+      if (res.ok && res.models && res.models.length) {
+        state.verifyModelOptions = res.models;
+        renderVerifyModelOptions();
+        toast(t('toast.models_ok') + ' · ' + t('llm.models_loaded', { n: res.models.length }), 'ok');
+      } else if (res.ok) {
+        toast(t('llm.models_none'), 'warn');
+      } else {
+        toast(t('toast.models_fail') + ': ' + (res.message || ''), 'err');
+      }
+    }).catch(function (err) {
+      toast(t('toast.models_fail'), 'err');
+    }).then(function () {
+      btn.disabled = false;
+    });
+  }
+
+  function renderVerifyModelOptions() {
+    var sel = $('#verify-model-pick');
+    if (!sel) return;
+    var list = state.verifyModelOptions || [];
+    sel.textContent = '';
+    if (!list.length) { sel.hidden = true; return; }
+    sel.hidden = false;
+    sel.appendChild(el('option', { value: '', text: t('llm.pick_model') }));
+    list.forEach(function (m) { sel.appendChild(el('option', { value: m, text: m })); });
+    var cur = $('#verify-model').value || '';
+    sel.value = list.indexOf(cur) >= 0 ? cur : '';
+  }
+
   function syncApiKeyField() {
     var provider = $('#llm-provider').value;
     var input = $('#api-key');
@@ -876,6 +938,11 @@
     if (cfg.llm) {
       delete cfg.llm.api_key_masked;
       delete cfg.llm.api_key_source;
+      // 校验模型的掩码/来源也只是回显，不能写回配置
+      if (cfg.llm.verify) {
+        delete cfg.llm.verify.api_key_masked;
+        delete cfg.llm.verify.api_key_source;
+      }
     }
     cfg.subscriptions = state.subOrder.map(function (code) {
       var s = state.subs.get(code) || {};
@@ -894,6 +961,7 @@
       keys[p] = v;
     });
     if (Object.keys(keys).length) payload.api_keys = keys;
+    if (state.verifyKeyTyped) payload.verify_api_key = state.verifyKeyTyped;
     return payload;
   }
 
@@ -912,6 +980,7 @@
         state.keySource = llm.api_key_source || {};
       }
       state.apiKeys = {};            // 已保存的明文不再保留在内存
+      state.verifyKeyTyped = '';     // 同上，校验模型的明文也不留
       applyValues();
       renderHeader();
       syncProviderUI();
@@ -1104,6 +1173,26 @@
     // 大模型
     $('#btn-test').addEventListener('click', testConnection);
     $('#btn-models').addEventListener('click', fetchModels);
+    $('#btn-verify-models').addEventListener('click', fetchVerifyModels);
+    $('#verify-model-pick').addEventListener('change', function () {
+      if (!this.value) return;
+      $('#verify-model').value = this.value;
+      setPath(state.config, 'llm.verify.model', this.value);
+    });
+    $('#verify-key').addEventListener('input', function () {
+      state.verifyKeyTyped = this.value;
+    });
+    $('#verify-provider').addEventListener('change', function () {
+      var p = state.providerMap[this.value];
+      // 换成具体厂商时按该厂商默认值回填；留空表示跟随生成模型
+      if (p) {
+        if (p.base_url) {
+          $('#verify-base-url').value = p.base_url;
+          setPath(state.config, 'llm.verify.base_url', p.base_url);
+        }
+      }
+      syncVerifyKeyField();
+    });
     $('#llm-provider').addEventListener('change', function () {
       var p = state.providerMap[$('#llm-provider').value];
       if (p) {

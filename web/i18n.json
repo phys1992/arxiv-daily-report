@@ -229,10 +229,13 @@
     "llm.verify.provider": "校验模型厂商",
     "llm.verify_provider_hint": "留空则与生成模型同一厂商。",
     "llm.verify.model": "校验模型名",
-    "llm.verify_model_hint": "留空则不启用校验。建议选与生成模型不同家族的模型，交叉检查更有效。",
+    "llm.verify_model_hint": "留空则不启用校验。可点右侧按钮从该接口拉取模型列表；建议选与生成模型不同家族的模型。",
     "llm.verify.base_url": "校验模型地址",
     "llm.verify_base_url_hint": "留空则用该厂商默认地址。",
-    "llm.verify_same": "与生成模型相同"
+    "llm.verify_same": "与生成模型相同",
+    "llm.verify.api_key": "校验模型 API Key",
+    "llm.verify_key_fallback": "留空则沿用该厂商已有的密钥",
+    "llm.pick_model": "从列表选择模型…"
   },
   "en": {
     "app.title": "arXiv Daily Report Settings",
@@ -464,9 +467,12 @@
     "llm.verify.provider": "Verifier provider",
     "llm.verify_provider_hint": "Leave empty to use the generator's provider.",
     "llm.verify.model": "Verifier model",
-    "llm.verify_model_hint": "Leave empty to disable. A model from a different family catches more.",
+    "llm.verify_model_hint": "Leave empty to disable. Fetch the list from the endpoint; a model from a different family catches more.",
     "llm.verify.base_url": "Verifier base URL",
     "llm.verify_base_url_hint": "Leave empty to use the provider default.",
-    "llm.verify_same": "Same as generator"
+    "llm.verify_same": "Same as generator",
+    "llm.verify.api_key": "Verifier API key",
+    "llm.verify_key_fallback": "Leave empty to reuse this provider's existing key",
+    "llm.pick_model": "Pick a model…"
   }
 }
