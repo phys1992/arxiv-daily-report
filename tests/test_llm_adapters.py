@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -68,22 +69,28 @@ class MockHandler(BaseHTTPRequestHandler):
 
 
 def setUpModule() -> None:
-    global SERVER, THREAD, BASE
+    global SERVER, THREAD, BASE, TMPDIR, CONFIG_PATH, STATE_PATH
     SERVER = ThreadingHTTPServer(("127.0.0.1", 0), MockHandler)
     BASE = f"http://127.0.0.1:{SERVER.server_address[1]}/v1"
     THREAD = threading.Thread(target=SERVER.serve_forever, daemon=True)
     THREAD.start()
+    # 每个进程用独立的临时目录：以前写死 /tmp/adr-test-*.json，
+    # 并行跑测试或上一轮残留都会互相干扰。
+    TMPDIR = tempfile.TemporaryDirectory(prefix="adr-llm-test-")
+    CONFIG_PATH = Path(TMPDIR.name) / "config.json"
+    STATE_PATH = Path(TMPDIR.name) / "state.sqlite3"
 
 
 def tearDownModule() -> None:
     SERVER.shutdown()
     SERVER.server_close()
+    TMPDIR.cleanup()
 
 
 class LLMAdapterTest(unittest.TestCase):
     def setUp(self) -> None:
         RECORDED.clear()
-        self.cfg = Config(path=Path("/tmp/adr-test-config.json"),
+        self.cfg = Config(path=CONFIG_PATH,
                           overrides={"llm": {"base_url": BASE, "model": "mock-small",
                                              "max_tokens": 256, "disable_thinking": True}})
 
@@ -137,7 +144,7 @@ class LLMAdapterTest(unittest.TestCase):
         custom.chat_json("s", "u")
         self.assertNotIn("thinking", [r for r in RECORDED if r["method"] == "POST"][-1]["body"])
 
-        cfg = Config(path=Path("/tmp/adr-test-config.json"),
+        cfg = Config(path=CONFIG_PATH,
                      overrides={"llm": {"base_url": BASE, "model": "mock",
                                         "disable_thinking": True}})
         deep = LLMClient(cfg, None, provider_key="deepseek")
@@ -148,7 +155,7 @@ class LLMAdapterTest(unittest.TestCase):
         self.assertEqual(body.get("thinking"), {"type": "disabled"})
 
     def test_usage_recorded_in_store(self):
-        store = Store(Path("/tmp/adr-test-state.sqlite3"))
+        store = Store(STATE_PATH)
         try:
             store.conn.execute("DELETE FROM token_ledger")
             store.conn.commit()
@@ -173,7 +180,7 @@ class LLMAdapterTest(unittest.TestCase):
         self.assertIsNone(_parse_json(""))
 
     def test_missing_key_reported(self):
-        cfg = Config(path=Path("/tmp/adr-test-config.json"),
+        cfg = Config(path=CONFIG_PATH,
                      overrides={"llm": {"provider": "openai", "base_url": BASE}})
         client = LLMClient(cfg, None)
         client.api_key = ""
