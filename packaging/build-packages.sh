@@ -40,13 +40,14 @@ for fmt in deb rpm archlinux; do
 import os, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 fmt = os.environ["FORMAT"]
+# matplotlib 用于把公式排成 SVG：安装包里没有 MathJax 的 node_modules
 deps = {
-    "archlinux": ["python", "python-weasyprint"],
+    "archlinux": ["python", "python-weasyprint", "python-matplotlib"],
     "deb": ["python3"],
     "rpm": ["python3"],
 }[fmt]
 # Arch 已硬依赖 weasyprint；Debian/Fedora 只能建议装 pip 后自行 pip install weasyprint
-recs = [] if fmt == "archlinux" else ["python3-pip"]
+recs = [] if fmt == "archlinux" else ["python3-pip", "python3-matplotlib"]
 tpl = (root / "packaging/nfpm.yaml.tmpl").read_text(encoding="utf-8")
 tpl = tpl.replace("@DEPENDS@", "\n".join("  - " + d for d in deps))
 tpl = tpl.replace("@RECOMMENDS@", "\n".join("  - " + r for r in recs) if recs else "  []")
