@@ -164,7 +164,8 @@ def build_category_report(
         else:
             say("  未配置模型密钥，输出元数据版")
 
-    math.prepare([p.title for p in papers] + [p.summary for p in papers])
+    math.prepare([p.title for p in papers] + [p.summary for p in papers]
+                 + [highlights] + list(theme_notes.values()))
 
     # 字体预检：字体由系统提供，这里只提醒「系统有没有中文字体」
     for w in font_preflight(cfg):

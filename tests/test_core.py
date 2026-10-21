@@ -1702,6 +1702,108 @@ class ReviewTest(HermeticTestCase):
         self.assertEqual(verdict, {})
 
 
+class DailyMathTest(HermeticTestCase):
+    """日报的「今日要点」和「分类速览」曾只做 HTML 转义，公式以源码出现。"""
+
+    def test_highlights_and_theme_notes_render_math(self):
+        from arxiv_daily_report.mathrender import MathService, _matplotlib_ready
+        from arxiv_daily_report.models import Paper
+        from arxiv_daily_report.render import ReportContext, render_daily_html
+
+        if not _matplotlib_ready():
+            self.skipTest("本机没有 matplotlib")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "c.json", overrides={
+                "paths": {"data": str(tmp / "d"), "cache": str(tmp / "k"),
+                          "reports": str(tmp / "r")}})
+            store = Store(tmp / "d" / "state.sqlite3")
+            try:
+                paper = Paper(arxiv_id="2610.9", version=1, title="T",
+                              authors=["A"], abstract="a",
+                              published="2026-10-01T00:00:00Z",
+                              updated="2026-10-01T00:00:00Z",
+                              primary_category="gr-qc", categories=["gr-qc"],
+                              themes=["other"])
+                paper.summary = "要点 T^7/Z_2^3"
+                hl = "今日重点 $G_{\\rm cosmo}/G_N=0.9920$ 与 T^7/Z_2^3。"
+                notes = {"other": "综述 AdS_4"}
+                svc = MathService(store, assets_dir=PROJECT / "assets",
+                                  backend="matplotlib")
+                svc.prepare([paper.title, paper.summary, hl] + list(notes.values()))
+                ctx = ReportContext(category="gr-qc", category_name="GR",
+                                    day="2026-10-01", papers=[paper],
+                                    assets_dir=cfg.assets_dir, highlights=hl,
+                                    theme_notes=notes,
+                                    theme_labels={"other": ("其他", "Other")},
+                                    theme_order=["other"], llm_model="m")
+                html = render_daily_html(ctx, svc)
+                self.assertGreaterEqual(html.count("<svg"), 3)
+                self.assertNotIn("T^7", html.replace("$T^7/Z_2^3$", ""))
+                self.assertIn("class='lead'", html)
+            finally:
+                store.close()
+
+
+class MonthlyMathTest(HermeticTestCase):
+    """月报也曾完全不走公式管线，导致公式以源码形式出现在 PDF 里。"""
+
+    def test_monthly_renders_math(self):
+        from arxiv_daily_report.mathrender import MathService, _matplotlib_ready
+        from arxiv_daily_report.report_monthly import MonthlyData, render_monthly_html
+
+        if not _matplotlib_ready():
+            self.skipTest("本机没有 matplotlib")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "c.json", overrides={
+                "subscriptions": [{"category": "gr-qc", "enabled": True,
+                                   "report_name": "", "out_dir": ""}],
+                "paths": {"data": str(tmp / "d"), "cache": str(tmp / "k"),
+                          "reports": str(tmp / "r")}})
+            store = Store(tmp / "d" / "state.sqlite3")
+            try:
+                data = MonthlyData(month="2026-10", days=["2026-10-13"], paper_count=2)
+                data.overview = "概览"
+                data.theme_notes = [{"code": "holography", "count": 2, "days": [],
+                                     "text": "在 T^7/Z_2^3 上得到 AdS_4 真空"}]
+                svc = MathService(store, assets_dir=PROJECT / "assets", backend="matplotlib")
+                svc.prepare([data.overview, data.theme_notes[0]["text"]])
+                html = render_monthly_html(cfg, data, scope_name="gr-qc", math=svc)
+                self.assertIn("<svg", html, "月报必须内联公式 SVG")
+                self.assertNotIn("T^7", html.replace("$T^7/Z_2^3$", ""))
+            finally:
+                store.close()
+
+    def test_monthly_without_math_still_works(self):
+        """没有公式服务时退回纯文本，不应崩。"""
+        from arxiv_daily_report.report_monthly import MonthlyData, render_monthly_html
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = Config(path=tmp / "c.json", overrides={
+                "subscriptions": [{"category": "gr-qc", "enabled": True}],
+                "paths": {"data": str(tmp / "d"), "cache": str(tmp / "k"),
+                          "reports": str(tmp / "r")}})
+            data = MonthlyData(month="2026-10", days=["2026-10-13"])
+            data.theme_notes = [{"code": "other", "count": 1, "days": [],
+                                 "text": "见 arXiv:2610.17034"}]
+            html = render_monthly_html(cfg, data, scope_name="gr-qc")
+            self.assertIn("arxiv.org/abs/2610.17034", html)
+
+    def test_prompts_require_dollar_math(self):
+        """提示词必须明确要求用 $...$，否则模型只写裸 T^7/Z_2^3。"""
+        from arxiv_daily_report.summarize import SYSTEM_EN, SYSTEM_ZH
+
+        for text in (SYSTEM_ZH, SYSTEM_EN):
+            self.assertIn("$...$", text)
+            self.assertIn("T^7/Z_2^3", text)
+            # 规则编号不能重复
+            import re as _re
+            nums = _re.findall(r"^(\d+)\. ", text, _re.M)
+            self.assertEqual(len(nums), len(set(nums)), f"规则编号重复：{nums}")
+
+
 class AnnualTest(HermeticTestCase):
     """年报：按子主题、参考日报与月报、按自然年。"""
 
@@ -1849,6 +1951,39 @@ class MathRenderTest(HermeticTestCase):
                 html = svc.to_html(text)
                 self.assertIn("<svg", html)
                 self.assertNotIn("math-unicode", html)
+                self.assertEqual(svc.report_stats()["unicode"], 0)
+            finally:
+                store.close()
+
+    def test_bare_math_is_wrapped(self):
+        """模型常把公式写成 T^7/Z_2^3（不带 $...$），必须补上分隔符。"""
+        from arxiv_daily_report.mathrender import normalize_math
+
+        self.assertEqual(normalize_math("在 T^7/Z_2^3 上"), "在 $T^7/Z_2^3$ 上")
+        self.assertEqual(normalize_math("真空 AdS_4"), "真空 $AdS_4$")
+        self.assertEqual(normalize_math("密度 10^{-3}"), "密度 $10^{-3}$")
+        # 已经带分隔符的不重复包裹
+        self.assertEqual(normalize_math("$T^7/Z_2^3$"), "$T^7/Z_2^3$")
+        # 不该误伤：arXiv 号、网址、残缺记号、普通文字
+        for t in ("arXiv:2610.17034", "https://example.com/a_b_c",
+                  "残留 M_ 不应包裹", "普通文字没有公式"):
+            self.assertEqual(normalize_math(t), t, t)
+
+    def test_bare_math_reaches_svg(self):
+        """归一化之后，裸公式也要能真的排成 SVG。"""
+        from arxiv_daily_report.mathrender import MathService, _matplotlib_ready
+
+        if not _matplotlib_ready():
+            self.skipTest("本机没有 matplotlib")
+        with tempfile.TemporaryDirectory() as td:
+            store = Store(Path(td) / "s.sqlite3")
+            try:
+                svc = MathService(store, assets_dir=PROJECT / "assets", backend="matplotlib")
+                text = "M 理论在 T^7/Z_2^3 上得到 AdS_4 真空"
+                svc.prepare([text])
+                html = svc.to_html(text)
+                self.assertIn("<svg", html)
+                self.assertNotIn("T^7", html.replace("$T^7/Z_2^3$", ""))
                 self.assertEqual(svc.report_stats()["unicode"], 0)
             finally:
                 store.close()

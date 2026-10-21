@@ -95,6 +95,58 @@ def _fix_svg(svg: str, tex: str = "") -> str:
     return svg
 
 
+_BARE_TOKEN = re.compile(r"[A-Za-z0-9{}^_+\-*/.=()]+")
+
+
+def _wrap_bare_segment(seg: str) -> str:
+    """把一段普通文本里裸写的公式补上 $...$。
+
+    模型并不总会照要求加 $...$：日报里见过 $T^7/Z_2^3$，月报里就写成
+    T^7/Z_2^3。没有分隔符时 MATH_RE 找不到它，只能当普通文字输出。
+    这里用「含上下标」作为判据补上分隔符；判据保守，只包裹带 ^ 或 _ 的记号。
+    """
+    if "^" not in seg and "_" not in seg:
+        return seg
+
+    def repl(m: re.Match) -> str:
+        tok = m.group(0)
+        core = tok.rstrip(".,;:!?，。；：、）)】」")
+        tail = tok[len(core):]
+        if not core or ("^" not in core and "_" not in core):
+            return tok
+        if core.endswith(("^", "_")):
+            return tok                                   # 结尾残缺，别硬包
+        return "$" + core + "$" + tail
+
+    return _BARE_TOKEN.sub(repl, seg)
+
+
+_URL_RE = re.compile(r"(?:https?://|www\.)[^\s，。；、）)】」]+")
+
+
+def normalize_math(text: str) -> str:
+    """给裸公式补上 $ 分隔符；已有 $...$ 的原样保留。"""
+    if not text or ("^" not in text and "_" not in text):
+        return text
+    # 先把网址摘出来，避免把 example.com/a_b_c 当成公式
+    urls: list[str] = []
+
+    def stash(m: re.Match) -> str:
+        urls.append(m.group(0))
+        return "\x00%d\x00" % (len(urls) - 1)
+
+    text = _URL_RE.sub(stash, text)
+    out: list[str] = []
+    pos = 0
+    for m in MATH_RE.finditer(text):
+        out.append(_wrap_bare_segment(text[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(_wrap_bare_segment(text[pos:]))
+    result = "".join(out)
+    return re.sub(r"\x00(\d+)\x00", lambda m: urls[int(m.group(1))], result)
+
+
 # ---------------------------------------------------------------------------
 # matplotlib 后端：用 mathtext 排成 SVG（字形转路径，不依赖 Node 与系统字体）
 #
@@ -203,7 +255,8 @@ class MathService:
     # -- 批量准备 ----------------------------------------------------------
     @staticmethod
     def extract(text: str) -> list[str]:
-        return [m.group(1).strip() for m in MATH_RE.finditer(text or "") if m.group(1).strip()]
+        text = normalize_math(text or "")
+        return [m.group(1).strip() for m in MATH_RE.finditer(text) if m.group(1).strip()]
 
     def prepare(self, texts: list[str]) -> None:
         """把一批文本里出现的公式补进缓存（一次 Node 调用批量渲染）。"""
@@ -277,6 +330,7 @@ class MathService:
         """把含 $...$ 的文本转成 HTML 片段（数学部分内联 SVG 或 Unicode）。"""
         if not text:
             return ""
+        text = normalize_math(text)
         out: list[str] = []
         pos = 0
         for m in MATH_RE.finditer(text):

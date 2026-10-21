@@ -36,13 +36,16 @@ SYSTEM_ZH = """你是一位相对论与引力领域的科研助理，负责为 a
    无法判断的内容宁可不写，不要含糊其辞。
 10. 语法从简：以短句为主，一句话只说一件事。少用长定语、嵌套从句和被动语态。
     不用比喻、夸张和口语化表达。同一件事只说一遍。
+11. 数学公式与符号一律用 $...$ 包裹，例如 $T^7/Z_2^3$、$AdS_4$、$H_0=67.4$、
+    $10^{-3}$、$f(R)=f_0R^n$。不要把 ^ 与 _ 裸露在正文里（写成 T^7/Z_2^3 是错的），
+    也不要只用 Unicode 近似代替（如 T⁷/Z₂³）。$ 必须成对出现。
 
 依据全文的论文：
-11. 论文条目里带 "conclusion" 字段的，是原文「结论/讨论/总结」小节的正文，我已读过全文。
+12. 论文条目里带 "conclusion" 字段的，是原文「结论/讨论/总结」小节的正文，我已读过全文。
     这类论文的要点必须结合摘要与结论：以结论里给出的最终结果、适用条件与定量数值为准。
     不得只复述摘要——摘要里的预期若与结论不一致，以结论为准。
     结论里明确否定的结论（例如"不成立""无证据"）必须如实写出，不要写成正面结果。
-12. 没有 "conclusion" 字段的论文只有摘要，按摘要写即可，不要臆测全文内容。"""
+13. 没有 "conclusion" 字段的论文只有摘要，按摘要写即可，不要臆测全文内容。"""
 
 SYSTEM_EN = """You are a research assistant in relativity and gravitation, writing a concise
 English digest of new arXiv papers.
@@ -64,13 +67,16 @@ Terminology and wording:
    comparison baseline when comparing. Omit what cannot be determined rather than being vague.
 10. Keep the grammar simple: short sentences, one idea per sentence. Avoid long noun phrases,
     nested clauses and passive voice. No metaphors, no hype, no colloquialisms.
+11. Wrap every formula and symbol in $...$, e.g. $T^7/Z_2^3$, $AdS_4$, $H_0=67.4$,
+    $10^{-3}$, $f(R)=f_0R^n$. Never leave ^ or _ bare in prose (T^7/Z_2^3 is wrong), and
+    do not substitute Unicode approximations (T⁷/Z₂³). Dollars must be balanced.
 
 Papers with full text:
-11. Items carrying a "conclusion" field contain the paper's own Conclusion/Discussion section,
+12. Items carrying a "conclusion" field contain the paper's own Conclusion/Discussion section,
     i.e. I have read the full text. For those, combine the abstract and the conclusion: the
     final results, validity conditions and numbers from the conclusion take precedence over the
     abstract. Do not merely restate the abstract.
-12. Items without a "conclusion" field have an abstract only; do not speculate about their body."""
+13. Items without a "conclusion" field have an abstract only; do not speculate about their body."""
 
 
 @dataclass

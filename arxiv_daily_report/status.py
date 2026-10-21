@@ -128,6 +128,33 @@ def _storage_hint(cfg: Config, store: Store | None = None) -> str:
             f"，缓存 {human(u['raw_bytes'])}")
 
 
+def _env_hint() -> str:
+    """当前进程的解释器与关键依赖。
+
+    systemd 用户服务用的解释器、PATH 可能与登录 shell 不同，
+    '公式显示成源码'这类问题八成要先看这一行。
+    """
+    import os
+    import sys
+
+    parts = [f"Python {sys.version.split()[0]} ({sys.executable})"]
+    if os.environ.get("INVOCATION_ID"):
+        parts.append("systemd 服务")
+    try:
+        import weasyprint
+
+        parts.append(f"WeasyPrint {weasyprint.__version__}")
+    except Exception:  # noqa: BLE001
+        parts.append("WeasyPrint 不可用")
+    try:
+        import matplotlib
+
+        parts.append(f"matplotlib {matplotlib.__version__}")
+    except Exception:  # noqa: BLE001
+        parts.append("matplotlib 未安装（公式会退化）")
+    return " · ".join(parts)
+
+
 def _verify_hint(cfg: Config) -> str:
     """双模型校验是否启用、用的是哪个模型。"""
     try:
@@ -243,6 +270,7 @@ def render_status(cfg: Config, store: Store) -> str:
         f"  缓存清理        {_cache_hint(cfg, store)}",
         f"  arXiv 请求      {_arxiv_hint(cfg, store)}",
         f"  公式排版        {_math_hint(cfg, store)}",
+        f"  运行环境        {_env_hint()}",
         f"  校验模型        {_verify_hint(cfg)}",
         f"  存储占用        {_storage_hint(cfg, store)}",
         "",

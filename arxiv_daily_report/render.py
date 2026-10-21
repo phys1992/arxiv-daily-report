@@ -394,13 +394,17 @@ def heading(lang: str, key: str, bilingual: bool = False) -> str:
     return rt(lang, key)
 
 
-def _p(text: str) -> str:
-    """把模型输出的多行文本转成若干 <p>。"""
+def _p(text: str, render=None) -> str:
+    """把模型输出的多行文本转成若干 <p>。
+
+    render 默认是 html.escape；传入 math.to_html 时公式会排成内联 SVG。
+    """
     lines = [ln.strip() for ln in (text or "").splitlines()]
     blocks = [ln for ln in lines if ln]
     if not blocks:
         return ""
-    return "".join(f"<p>{html.escape(b)}</p>" for b in blocks)
+    conv = render or html.escape
+    return "".join(f"<p>{conv(b)}</p>" for b in blocks)
 
 
 def _theme_of(paper: Paper, order: list[str]) -> str:
@@ -453,7 +457,7 @@ def render_daily_html(ctx: ReportContext, math: MathService) -> str:
     # 今日要点
     if ctx.highlights:
         parts.append(f"<h2>{heading(lang, 'report.highlights', ctx.bilingual)}</h2>")
-        parts.append(f"<div class='lead'>{_p(ctx.highlights)}</div>")
+        parts.append(f"<div class='lead'>{_p(ctx.highlights, math.to_html)}</div>")
 
     # 分类速览
     groups: dict[str, list[Paper]] = {}

@@ -61,7 +61,11 @@ SYSTEM_ZH = """你是一位相对论与引力领域的科研助理，负责把�
 篇幅：
 11. 简报面向的是"这个月发生了什么"，不是流水账。分主题要点每个主题只写 2–4 项
     最重要的进展，同类工作合并成一句（例如"多篇工作改进了 X 的约束"），
-    不要逐篇罗列，也不要把日报的句子搬过来。宁可少写几项，也不要铺满篇幅。"""
+    不要逐篇罗列，也不要把日报的句子搬过来。宁可少写几项，也不要铺满篇幅。
+
+  数学公式与符号一律用 $...$ 包裹（例如 $AdS_4$、$T^7/Z_2^3$），
+  不要把 ^ 与 _ 裸露在正文里，也不要只写 Unicode 近似。
+"""
 
 SYSTEM_EN = """You are a research assistant in relativity and gravitation, condensing a month of
 daily arXiv digests into a short monthly brief.
@@ -681,18 +685,29 @@ def _last_day(month: str) -> int:
     return (nxt - dt.timedelta(days=1)).day
 
 
-def linkify_arxiv(text: str) -> str:
-    """转义后把正文里的 arXiv 号变成可点击链接。"""
-    safe = html.escape(text or "")
-    return re.sub(
-        r"arXiv:\s*([0-9]{4}\.[0-9]{4,5})",
+_ARXIV_LINK_RE = re.compile(r"arXiv:\s*([0-9]{4}\.[0-9]{4,5})")
+
+
+def linkify_only(safe_html: str) -> str:
+    """输入**已经转义**的 HTML，只把 arXiv 号换成链接。
+
+    公式渲染（MathService.to_html）本身会做转义并插入内联 SVG，
+    之后再调 linkify_arxiv 会把 & 二次转义，所以需要这个不做转义的版本。
+    """
+    return _ARXIV_LINK_RE.sub(
         lambda m: (f'<a class="arx" href="https://arxiv.org/abs/{m.group(1)}">'
                    f'arXiv:{m.group(1)}</a>'),
-        safe,
+        safe_html or "",
     )
 
 
-def render_monthly_html(cfg: Config, data: MonthlyData, *, scope_name: str) -> str:
+def linkify_arxiv(text: str) -> str:
+    """转义后把正文里的 arXiv 号变成可点击链接。"""
+    return linkify_only(html.escape(text or ""))
+
+
+def render_monthly_html(cfg: Config, data: MonthlyData, *, scope_name: str,
+                        math=None) -> str:
     lang = cfg.get("report_language", "zh")
     bilingual = lang == "zh-en"
     if lang not in ("zh", "en"):
@@ -719,6 +734,15 @@ def render_monthly_html(cfg: Config, data: MonthlyData, *, scope_name: str) -> s
         span = f"{day_label(first, 'en')}–{day_label(last, 'en')}" if first != last else day_label(first, "en")
         subtitle = (f"{y}-{m} · covering {span} · {len(data.days)} daily digests · "
                     f"{data.paper_count} papers · generated {generated}")
+
+    # 正文渲染：有公式服务就走 to_html（转义 + 内联 SVG），再补 arXiv 链接；
+    # 没有就退回原来的「转义 + 链接」。月报此前完全没有公式管线。
+    if math is not None:
+        def render(text: str) -> str:
+            return linkify_only(math.to_html(text))
+    else:
+        def render(text: str) -> str:
+            return linkify_arxiv(text)
 
     parts = ["<!doctype html><html><head><meta charset='utf-8'>"]
     parts.append(f"<title>{html.escape(title)}</title><style>")
@@ -749,7 +773,7 @@ a.arx { color:#2f6fb5; text-decoration:none; font-size:9.5pt; }
         parts.append("<div class='abstract'>")
         for para in data.overview.splitlines():
             if para.strip():
-                parts.append(f"<p>{linkify_arxiv(para.strip())}</p>")
+                parts.append(f"<p>{render(para.strip())}</p>")
         parts.append("</div>")
 
     if data.highlights:
@@ -768,7 +792,7 @@ a.arx { color:#2f6fb5; text-decoration:none; font-size:9.5pt; }
             elif tag:
                 tag = f"（{tag}）"
             suffix = f" <span class='daytag'>{tag}</span>" if tag else ""
-            parts.append(f"<li>{linkify_arxiv(h['text'])}{suffix}</li>")
+            parts.append(f"<li>{render(h['text'])}{suffix}</li>")
         parts.append("</ol>")
 
     if data.theme_notes:
@@ -782,7 +806,7 @@ a.arx { color:#2f6fb5; text-decoration:none; font-size:9.5pt; }
                              else f" <span class='meta'>{t['count']} papers</span>")
             parts.append(
                 f"<div class='theme'><span class='name'>{html.escape(label)}</span>{meta_html}"
-                f"<p>{linkify_arxiv(t['text'])}</p></div>"
+                f"<p>{render(t['text'])}</p></div>"
             )
 
     foot = ("内容取自当月每日日报，不另列文献；括号内标注该内容出现的日报日期，"
@@ -860,7 +884,16 @@ def run_monthly(
     for w in font_preflight(cfg):
         say("  字体提醒：" + w)
 
-    html_text = render_monthly_html(cfg, data, scope_name=scope)
+    # 公式：与日报走同一套管线（MathJax → matplotlib → Unicode）
+    from .mathrender import MathService
+
+    math = MathService(store, assets_dir=cfg.assets_dir,
+                       backend=cfg["report"].get("math_backend", "auto"))
+    math.prepare([data.overview]
+                 + [h.get("text", "") for h in data.highlights]
+                 + [t.get("text", "") for t in data.theme_notes])
+
+    html_text = render_monthly_html(cfg, data, scope_name=scope, math=math)
     # 跟随 paths.reports（而不是写死 reports/），自定义报告目录时月报也一起搬过去
     out_dir = cfg.reports_dir / "monthly" / scope_slug
     out_dir.mkdir(parents=True, exist_ok=True)
