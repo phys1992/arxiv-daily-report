@@ -2,7 +2,7 @@
 # 构建 Debian / Fedora / Arch 三种安装包（deb、rpm、pkg.tar.zst）。
 #
 #   ./packaging/build-packages.sh              # 版本号从包元数据读取
-#   VERSION=0.2.1 ./packaging/build-packages.sh
+#   VERSION=0.2.2 ./packaging/build-packages.sh
 #
 # 依赖 nfpm（单文件二进制）：https://github.com/goreleaser/nfpm/releases
 #   CI 里由 .github/workflows/release.yml 负责安装；本地可放到 PATH 或用 NFP M 变量指定。

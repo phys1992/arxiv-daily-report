@@ -453,6 +453,10 @@ def run_annual(
     _, backend = render_pdf(html_text, pdf, base_url=cfg.assets_dir)
     say(f"  年报生成（{backend}）：{pdf}")
     store.record_report(year, data.scope, str(pdf), data.paper_count, kind="annual")
+    from .publish import publish_to, write_latest
+
+    write_latest(out_dir, pdf)
+    publish_to(cfg, pdf)
     store.save_annual_digest(
         year, data.scope, overview=data.overview,
         themes=[{"code": t["code"], "text": t["text"], "refs": t["refs"]} for t in data.themes],

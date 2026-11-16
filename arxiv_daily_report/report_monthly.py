@@ -901,6 +901,11 @@ def run_monthly(
     _, backend = render_pdf(html_text, pdf, base_url=cfg.assets_dir)
     say(f"  月报生成（{backend}）：{pdf}")
     store.record_report(month, scope, str(pdf), data.paper_count, kind="monthly")
+    # 发布目录此前只收日报，月报/年报漏了
+    from .publish import publish_to, write_latest
+
+    write_latest(out_dir, pdf)
+    publish_to(cfg, pdf)
     # 存档月报正文：年报要同时参考日报与月报
     if data.overview or data.highlights or data.theme_notes:
         store.save_month_digest(

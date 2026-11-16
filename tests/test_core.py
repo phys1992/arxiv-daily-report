@@ -1817,6 +1817,100 @@ class SchedulerTimezoneTest(HermeticTestCase):
             self.assertIsNone(should_run_annual(cfg, _dt.datetime(2026, 12, 31, 23, 30, tzinfo=bj)))
 
 
+class PublishTest(HermeticTestCase):
+    """发布目录要收三类产物，不只是日报。"""
+
+    def _cfg(self, td, publish: bool = True):
+        paths = {"data": str(td / "d"), "cache": str(td / "k"),
+                 "reports": str(td / "r")}
+        if publish:
+            paths["publish_dir"] = str(td / "pub")
+        return Config(path=td / "c.json", overrides={
+            "schedule": {"timezone": "Asia/Shanghai", "mode": "manual"},
+            "subscriptions": [{"category": "gr-qc", "enabled": True,
+                               "report_name": "", "out_dir": ""}],
+            "paths": paths})
+
+    def test_unset_publish_dir_is_noop(self):
+        from arxiv_daily_report.publish import publish_to
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp, publish=False)
+            src = tmp / "r" / "gr-qc" / "2026-10" / "a.pdf"
+            src.parent.mkdir(parents=True)
+            src.write_bytes(b"%PDF-1.4")
+            self.assertIsNone(publish_to(cfg, src))
+            self.assertFalse((tmp / "pub").exists())
+
+    def test_publish_keeps_relative_structure(self):
+        from arxiv_daily_report.publish import publish_to
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            for rel in ("gr-qc/2026-10/2026-10-20.pdf",
+                        "monthly/gr-qc/2026-10.pdf",
+                        "annual/gr-qc/2026.pdf"):
+                src = cfg.reports_dir / rel
+                src.parent.mkdir(parents=True, exist_ok=True)
+                src.write_bytes(b"%PDF-1.4 " + rel.encode())
+                dest = publish_to(cfg, src)
+                self.assertEqual(dest, cfg.publish_dir / rel)
+                self.assertTrue(dest.exists(), rel)
+                self.assertEqual(dest.read_bytes(), src.read_bytes())
+
+    def _seed(self, store):
+        store.save_day_digest("2026-10-13", "gr-qc", highlights="要点",
+                              themes={"blackhole": "综述"}, theme_counts={"blackhole": 2},
+                              papers=[{"id": "2610.1", "title": "T"}], count=2)
+
+    def _stub_render(self, module):
+        """把 PDF 渲染换成写一个占位文件，避免测试依赖 weasyprint。"""
+        from unittest import mock
+
+        def fake(html_text, out_path, base_url=None):
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"%PDF-1.4 stub")
+            return out_path, "stub"
+
+        return mock.patch(f"{module}.render_pdf", fake)
+
+    def test_monthly_is_published(self):
+        from arxiv_daily_report.report_monthly import run_monthly
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            store = Store(tmp / "d" / "state.sqlite3")
+            try:
+                self._seed(store)
+                with self._stub_render("arxiv_daily_report.report_monthly"):
+                    run_monthly(cfg, store, month="2026-10", use_llm=False,
+                                progress=lambda m: None)
+                dest = cfg.publish_dir / "monthly" / "gr-qc" / "2026-10.pdf"
+                self.assertTrue(dest.exists(), "月报必须进入发布目录")
+            finally:
+                store.close()
+
+    def test_annual_is_published(self):
+        from arxiv_daily_report.report_annual import run_annual
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._cfg(tmp)
+            store = Store(tmp / "d" / "state.sqlite3")
+            try:
+                self._seed(store)
+                with self._stub_render("arxiv_daily_report.report_annual"):
+                    run_annual(cfg, store, year="2026", use_llm=False,
+                               progress=lambda m: None)
+                dest = cfg.publish_dir / "annual" / "gr-qc" / "2026.pdf"
+                self.assertTrue(dest.exists(), "年报必须进入发布目录")
+            finally:
+                store.close()
+
+
 class DigestPreserveTest(HermeticTestCase):
     """--no-llm 跑一遍不能把已存的今日要点/主题综述抹掉（月报依赖它们）。"""
 
@@ -2121,7 +2215,7 @@ class MathRenderTest(HermeticTestCase):
         self.assertEqual(normalize_math("价格是 $5 一个，含 T^7"), "价格是 $5 一个，含 T^7")
 
     def test_no_dollar_inserted_inside_latex_command(self):
-        """回归：旧实现把 \phi^{\mu\nu} 拆成 $\phi^{$\mu\nu}，渲染成 φ^μν}。"""
+        r"""回归：旧实现把 \phi^{\mu\nu} 拆成 $\phi^{$\mu\nu}，渲染成 φ^μν}。"""
         from arxiv_daily_report.mathrender import normalize_math
 
         for src in (r"\phi^{\mu\nu}", r"G^{\lambda}{}_{\mu\nu}", "φ^{μν}", "G^λ_{μν}"):
@@ -2246,7 +2340,8 @@ class BackfillTest(HermeticTestCase):
                     self._add(store, day)
                 # 单次上限 2 天 -> 只补最早两天
                 out = backfill_missing(cfg, store, use_llm=False,
-                                      progress=lambda m: None, limit=2)
+                                      progress=lambda m: None, limit=2,
+                                      today="2026-10-13")
                 self.assertEqual(len(out), 2)
                 self.assertTrue(store.report_exists("2026-10-10", "gr-qc"))
                 self.assertTrue(store.report_exists("2026-10-11", "gr-qc"))
@@ -2263,8 +2358,10 @@ class BackfillTest(HermeticTestCase):
             try:
                 store.kv_set("initial_backfill_done", "1")
                 self._add(store, "2026-10-10")
-                backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
-                again = backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
+                backfill_missing(cfg, store, use_llm=False, progress=lambda m: None,
+                                 today="2026-10-13")
+                again = backfill_missing(cfg, store, use_llm=False, progress=lambda m: None,
+                                         today="2026-10-13")
                 self.assertEqual(again, [])
             finally:
                 store.close()
@@ -2283,14 +2380,16 @@ class BackfillTest(HermeticTestCase):
                 self.assertEqual(found, days)
                 # 配置的单次上限是 2，但初次运行应忽略它
                 self.assertEqual(cfg["schedule"]["backfill_max_per_run"], 2)
-                out = backfill_missing(cfg, store, use_llm=False, progress=lambda m: None)
+                out = backfill_missing(cfg, store, use_llm=False, progress=lambda m: None,
+                                       today="2026-10-13")
                 self.assertEqual(len(out), len(days), "初次运行应一次补齐当月")
                 for day in days:
                     self.assertTrue(store.report_exists(day, "gr-qc"))
                 self.assertEqual(store.kv_get("initial_backfill_done", ""), "1")
                 # 之后再跑不应重复生成
                 self.assertEqual(
-                    backfill_missing(cfg, store, use_llm=False, progress=lambda m: None), [])
+                    backfill_missing(cfg, store, use_llm=False, progress=lambda m: None,
+                                     today="2026-10-13"), [])
             finally:
                 store.close()
 

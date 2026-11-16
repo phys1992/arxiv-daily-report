@@ -14,6 +14,7 @@ from .llm.client import LLMClient
 from .mathrender import MathService
 from .models import Paper
 from .pdf import render_pdf
+from .publish import publish_to as _publish
 from .fulltext import FullText, FullTextService
 from .render import (ReportContext, font_css, font_preflight, font_stack,
                      load_theme_taxonomy, render_daily_html)
@@ -237,17 +238,8 @@ def build_category_report(
 
 
 def publish_to(cfg: Config, pdf_path: Path) -> None:
-    dest_root = cfg.publish_dir
-    if not dest_root:
-        return
-    try:
-        rel = pdf_path.relative_to(cfg.reports_dir)
-    except ValueError:
-        rel = Path(pdf_path.name)
-    dest = dest_root / rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(pdf_path.read_bytes())
-    log.info("已发布到 %s", dest)
+    """日报的发布入口（实现在 .publish，月报/年报共用同一套规则）。"""
+    _publish(cfg, pdf_path)
 
 
 def write_index(cfg: Config, store: Store, day: str) -> Path:
@@ -363,13 +355,17 @@ def backfill_missing(
     use_llm: bool = True,
     progress: Progress | None = None,
     limit: int | None = None,
+    today: str | None = None,
 ) -> list[Path]:
-    """补齐缺失的日报。单次最多补 `backfill_max_per_run` 天，避免一次性刷爆模型额度。"""
+    """补齐缺失的日报。单次最多补 `backfill_max_per_run` 天，避免一次性刷爆模型额度。
+
+    today 只用于测试注入「今天是哪天」；正常调用保持 None 用真实日期。
+    """
     say: Progress = progress or (lambda m: log.info("%s", m))
     tz_name = cfg["schedule"].get("timezone", "Asia/Shanghai")
     cap = int(cfg["schedule"].get("backfill_max_per_run", 3)
               if limit is None else limit)
-    pending = missing_days(cfg, store)
+    pending = missing_days(cfg, store, today=today)
     if not pending:
         say("补缺检查：当月没有缺失的日报")
         return []
